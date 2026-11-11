@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "fixtures/probe", "fixtures/planted"]
+members = [".", "fixtures/early", "fixtures/probe", "fixtures/planted"]
 
 [package]
 name = "libsearch-guard"
@@ -23,3 +23,5 @@ object = { version = "0.41", default-features = false, features = ["read_core", 
 [dev-dependencies]
 # Per-test scratch directories removed on drop, panic or not.
 tempfile = "3"
+# Reads cargo's `--message-format=json` output when the tests build the fixture packages.
+serde_json = "1"

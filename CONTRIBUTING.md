@@ -1,5 +1,9 @@
 # Contributing to libsearch-guard
 
+## Testing
+
+`cargo test --workspace` builds the fixture packages with a nested cargo. One unit test compiles the pre-`main` initializer for every Windows MSVC architecture it traps on, so it needs those targets: `rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc aarch64-pc-windows-msvc arm64ec-pc-windows-msvc`. Without them it fails, naming the target; `LIBSEARCH_GUARD_SKIP_CROSS_TARGET_TESTS=1` skips it.
+
 ## Releasing
 
 Releases go through two GitHub Actions workflows, both started by hand. Stage 1 is fully reversible; stage 2 does the irreversible things (publishing to crates.io, creating the tag). Reviewing the draft release between them is the last chance to catch a problem.

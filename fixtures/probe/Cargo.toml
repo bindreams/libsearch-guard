@@ -5,8 +5,13 @@ edition = "2021"
 publish = false
 description = "Test fixture: a binary that tries to load a DLL by name. Built hardened or not by the crate's tests."
 
+[lib]
+name = "probe_lib"
+crate-type = ["lib", "cdylib"]
+
 [build-dependencies]
 libsearch-guard = { path = "../.." }
 
 [target.'cfg(windows)'.dependencies]
+early = { path = "../early" }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }

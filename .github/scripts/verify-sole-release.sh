@@ -8,16 +8,14 @@
 #
 # GitHub's list-releases endpoint is eventually consistent after a create:
 # seconds after the POST returned this run's draft, the listing may still
-# not include it (observed: run 36648825456 counted 0 and deleted its own
-# perfectly good draft as a "duplicate"). So a count taken before the
+# not include it. So a count taken before the
 # listing shows RELEASE_ID says nothing about duplicates. This script
 # re-lists, with backoff, until the listing contains RELEASE_ID — a
 # deterministic condition that a lagging listing will eventually satisfy —
 # and only then counts.
 #
-# The wait bound is a failure limit for a remote API response, not proof of
-# anything: on expiry the draft is left in place (it is not known to be a
-# duplicate) and the operator is told to check it by hand.
+# On expiry the draft is left in place (not known to be a duplicate) and the
+# operator is told to check by hand.
 set -euo pipefail
 
 : "${GH_REPO:?}" "${VERSION:?}" "${RELEASE_ID:?}"
@@ -28,11 +26,7 @@ TAG="v${VERSION}"
 
 started=$SECONDS
 while :; do
-	# `--paginate` alone does NOT merge pages into one array: each page is
-	# its own top-level JSON array on its own line, and a filter run once
-	# over the whole output would only see the last one. `--slurp` wraps
-	# every page into a single outer array instead, so `.[][]` below
-	# iterates every release across every page as one flat sequence.
+	# --slurp merges the per-page arrays into one, so `.[][]` sees every release.
 	releases_json=$(gh api "repos/${GH_REPO}/releases" --paginate --slurp) || {
 		echo "::error::Draft release $TAG (id $RELEASE_ID) was created, but listing releases afterward to confirm it's the only one with this tag failed. Do not assume it's fine: check https://github.com/${GH_REPO}/releases by hand, and delete this run's own draft (gh api repos/${GH_REPO}/releases/${RELEASE_ID} -X DELETE) if a duplicate turns out to exist."
 		exit 1

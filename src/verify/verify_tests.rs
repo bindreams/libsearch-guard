@@ -22,5 +22,5 @@ fn a_file_that_is_not_an_executable_is_unreadable_not_clean() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.txt");
     std::fs::write(&path, b"hello").unwrap();
-    assert!(matches!(verify(&path), Err(VerifyError::Unreadable(_))));
+    assert!(matches!(verify(&path), Err(VerifyError::Unreadable { .. })));
 }
