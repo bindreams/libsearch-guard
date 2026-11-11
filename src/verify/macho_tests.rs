@@ -1,6 +1,6 @@
 use super::crafted::{
-    dylib_command, dylinker_command, elf, macho, macho_fat, rpath_command, LC_DYLD_ENVIRONMENT, LC_ID_DYLIB,
-    LC_LOAD_DYLIB, LC_LOAD_DYLINKER,
+    dylib_command, dylinker_command, elf, macho, macho32, macho_fat, rpath_command, LC_DYLD_ENVIRONMENT, LC_ID_DYLIB,
+    LC_LAZY_LOAD_DYLIB, LC_LOAD_DYLIB, LC_LOAD_DYLINKER, LC_LOAD_UPWARD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB,
 };
 use super::{verify_bytes, VerifyError, ViolationKind};
 
@@ -173,5 +173,51 @@ fn violations_found_before_an_unreadable_slice_are_in_the_error() {
     assert!(
         why.contains("MachoRpath") && why.contains("@executable_path/lib"),
         "{why}"
+    );
+}
+
+/// Every command that makes dyld load a dylib by name, not only `LC_LOAD_DYLIB`.
+const LOADING_COMMANDS: [(u32, &str); 5] = [
+    (LC_LOAD_DYLIB, "LC_LOAD_DYLIB"),
+    (LC_LOAD_WEAK_DYLIB, "LC_LOAD_WEAK_DYLIB"),
+    (LC_REEXPORT_DYLIB, "LC_REEXPORT_DYLIB"),
+    (LC_LOAD_UPWARD_DYLIB, "LC_LOAD_UPWARD_DYLIB"),
+    (LC_LAZY_LOAD_DYLIB, "LC_LAZY_LOAD_DYLIB"),
+];
+
+#[test]
+fn every_dylib_loading_command_is_checked() {
+    for (command, name) in LOADING_COMMANDS {
+        assert_eq!(
+            kinds(&macho(&[dylib_command(command, "@rpath/libx.dylib")])),
+            vec![ViolationKind::MachoDylib],
+            "{name}"
+        );
+        assert_eq!(
+            kinds(&macho(&[dylib_command(command, "/usr/lib/libx.dylib")])),
+            vec![],
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_32_bit_macho_is_checked() {
+    let image = macho32(&[
+        rpath_command("@loader_path"),
+        dylib_command(LC_LOAD_DYLIB, "@rpath/libx.dylib"),
+        dylinker_command(LC_DYLD_ENVIRONMENT, "DYLD_LIBRARY_PATH=lib"),
+    ]);
+    assert_eq!(
+        kinds(&image),
+        vec![
+            ViolationKind::MachoRpath,
+            ViolationKind::MachoDylib,
+            ViolationKind::MachoDyldEnvironment
+        ]
+    );
+    assert_eq!(
+        kinds(&macho32(&[dylib_command(LC_LOAD_DYLIB, "/usr/lib/libSystem.B.dylib")])),
+        vec![]
     );
 }
