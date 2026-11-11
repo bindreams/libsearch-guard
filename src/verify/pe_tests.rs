@@ -15,6 +15,7 @@ const FULL: u32 = size_of::<object::pe::ImageLoadConfigDirectory64>() as u32;
 fn hardened_pe_passes() {
     let image = pe(&Pe {
         imports: &["KERNEL32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"],
+        delay_imports: &[],
         load_config: Some((0x800, FULL)),
     });
     assert_eq!(kinds(&image), vec![]);
@@ -24,6 +25,7 @@ fn hardened_pe_passes() {
 fn flags_that_include_system32_pass() {
     let image = pe(&Pe {
         imports: &["KERNEL32.dll"],
+        delay_imports: &[],
         load_config: Some((0x800 | 0x200, FULL)),
     });
     assert_eq!(kinds(&image), vec![]);
@@ -33,6 +35,7 @@ fn flags_that_include_system32_pass() {
 fn flags_without_system32_are_reported() {
     let image = pe(&Pe {
         imports: &["KERNEL32.dll"],
+        delay_imports: &[],
         load_config: Some((0x400, FULL)),
     });
     assert_eq!(kinds(&image), vec![ViolationKind::PeDependentLoadFlags]);
@@ -42,6 +45,7 @@ fn flags_without_system32_are_reported() {
 fn missing_load_config_is_reported() {
     let image = pe(&Pe {
         imports: &["KERNEL32.dll"],
+        delay_imports: &[],
         load_config: None,
     });
     assert_eq!(kinds(&image), vec![ViolationKind::PeDependentLoadFlags]);
@@ -51,6 +55,7 @@ fn missing_load_config_is_reported() {
 fn load_config_too_short_to_hold_the_flags_is_reported() {
     let image = pe(&Pe {
         imports: &["KERNEL32.dll"],
+        delay_imports: &[],
         load_config: Some((0x800, 0x40)),
     });
     assert_eq!(kinds(&image), vec![ViolationKind::PeDependentLoadFlags]);
@@ -59,6 +64,7 @@ fn load_config_too_short_to_hold_the_flags_is_reported() {
 fn runtime_import_kinds(dll: &str) -> Vec<ViolationKind> {
     kinds(&pe(&Pe {
         imports: &["KERNEL32.dll", dll],
+        delay_imports: &[],
         load_config: Some((0x800, FULL)),
     }))
 }
@@ -148,10 +154,47 @@ fn system_dlls_with_a_runtime_like_name_are_not_reported() {
     }
 }
 
+fn delay_load_kinds(imports: &[&str], delay_imports: &[&str]) -> Vec<ViolationKind> {
+    kinds(&pe(&Pe {
+        imports,
+        delay_imports,
+        load_config: Some((0x800, FULL)),
+    }))
+}
+
+/// A delay-loaded DLL is loaded by `LoadLibrary` at the first call, searched for like any other.
+#[test]
+fn a_delay_loaded_redistributable_is_reported() {
+    for dll in ["msvcp140.dll", "VCRUNTIME140.dll", "atl100.dll"] {
+        assert_eq!(
+            delay_load_kinds(&["KERNEL32.dll"], &["KERNEL32.dll", dll]),
+            vec![ViolationKind::PeRuntimeImport],
+            "{dll}"
+        );
+    }
+}
+
+#[test]
+fn delay_loaded_system_dlls_pass() {
+    assert_eq!(
+        delay_load_kinds(&["KERNEL32.dll"], &["msvcp_win.dll", "ole32.dll"]),
+        vec![]
+    );
+}
+
+#[test]
+fn a_redistributable_is_reported_once_per_table_that_imports_it() {
+    assert_eq!(
+        delay_load_kinds(&["msvcp140.dll"], &["msvcp140.dll"]),
+        vec![ViolationKind::PeRuntimeImport; 2]
+    );
+}
+
 #[test]
 fn every_violation_is_reported_not_only_the_first() {
     let image = pe(&Pe {
         imports: &["VCRUNTIME140.dll", "MSVCP140.dll"],
+        delay_imports: &[],
         load_config: None,
     });
     assert_eq!(

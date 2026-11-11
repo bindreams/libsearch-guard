@@ -1,5 +1,5 @@
 //! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32`, and no Visual C++
-//! redistributable DLL is imported.
+//! redistributable DLL is imported, in the import table or the delay-load import table.
 
 use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG};
 use object::read::pe::{ImageNtHeaders, PeFile};
@@ -38,18 +38,27 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         });
     }
 
+    // A delay-loaded DLL is loaded by `LoadLibrary` at its first call, and is searched for like an imported one.
+    let mut names = Vec::new();
     if let Some(imports) = file.import_table().map_err(unreadable)? {
         let mut descriptors = imports.descriptors().map_err(unreadable)?;
         while let Some(descriptor) = descriptors.next().map_err(unreadable)? {
-            let name = imports.name(descriptor.name.get(LE)).map_err(unreadable)?;
-            let name = String::from_utf8_lossy(name);
-            let lower = name.to_ascii_lowercase();
-            if is_redistributable(&lower) {
-                out.push(Violation {
-                    kind: ViolationKind::PeRuntimeImport,
-                    detail: format!("imports {name}, which is searched for in the executable's folder first"),
-                });
-            }
+            names.push(imports.name(descriptor.name.get(LE)).map_err(unreadable)?);
+        }
+    }
+    if let Some(imports) = file.delay_load_import_table().map_err(unreadable)? {
+        let mut descriptors = imports.descriptors().map_err(unreadable)?;
+        while let Some(descriptor) = descriptors.next().map_err(unreadable)? {
+            names.push(imports.name(descriptor.dll_name_rva.get(LE)).map_err(unreadable)?);
+        }
+    }
+    for name in names {
+        let name = String::from_utf8_lossy(name);
+        if is_redistributable(&name.to_ascii_lowercase()) {
+            out.push(Violation {
+                kind: ViolationKind::PeRuntimeImport,
+                detail: format!("imports {name}, which is searched for in the executable's folder first"),
+            });
         }
     }
     Ok(())

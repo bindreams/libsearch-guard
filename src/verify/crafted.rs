@@ -179,6 +179,8 @@ pub fn macho_fat(slices: &[Vec<u8>]) -> Vec<u8> {
 /// What a crafted PE32+ image should contain.
 pub struct Pe<'a> {
     pub imports: &'a [&'a str],
+    /// DLLs in the delay-load import directory.
+    pub delay_imports: &'a [&'a str],
     /// `None`: no load config directory. `Some((flags, size))`: a directory of `size` bytes with these flags;
     /// a `size` too small to reach the field omits it.
     pub load_config: Option<(u16, u32)>,
@@ -218,6 +220,25 @@ pub fn pe(spec: &Pe) -> Vec<u8> {
         SECTION_RVA + descriptors_at as u32,
         ((spec.imports.len() + 1) * 20) as u32,
     );
+
+    let mut delay_dir = (0u32, 0u32);
+    if !spec.delay_imports.is_empty() {
+        sec.resize(sec.len().next_multiple_of(8), 0);
+        let descriptors_at = sec.len();
+        sec.resize(descriptors_at + (spec.delay_imports.len() + 1) * 32, 0); // descriptors + null terminator
+        for (i, dll) in spec.delay_imports.iter().enumerate() {
+            let name_rva = SECTION_RVA + sec.len() as u32;
+            sec.extend_from_slice(dll.as_bytes());
+            sec.push(0);
+            let at = descriptors_at + i * 32;
+            put(&mut sec, at, &1u32.to_le_bytes()); // IMAGE_DELAYLOAD_RVA_BASED
+            put(&mut sec, at + 4, &name_rva.to_le_bytes());
+        }
+        delay_dir = (
+            SECTION_RVA + descriptors_at as u32,
+            ((spec.delay_imports.len() + 1) * 32) as u32,
+        );
+    }
 
     let mut load_dir = (0u32, 0u32);
     if let Some((flags, size)) = spec.load_config {
@@ -260,6 +281,7 @@ pub fn pe(spec: &Pe) -> Vec<u8> {
     };
     dir(&mut opt, 1, import_dir);
     dir(&mut opt, 10, load_dir);
+    dir(&mut opt, 13, delay_dir);
     img.extend_from_slice(&opt);
     // Section header.
     let mut header = [0u8; 40];
