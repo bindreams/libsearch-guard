@@ -23,15 +23,20 @@ const LOAD_ADDRESS: u64 = 0x40_0000;
 /// whole file, and a `PT_DYNAMIC` segment holding one string entry per `(tag, value)` plus `DT_STRTAB` and
 /// `DT_STRSZ`. No entries gives an image with no `PT_DYNAMIC`.
 pub fn elf(entries: &[(u64, &str)]) -> Vec<u8> {
-    elf_with_strtab_at(entries, LOAD_ADDRESS)
+    elf_image(entries, LOAD_ADDRESS, None)
+}
+
+/// [`elf`] with a `PT_INTERP` segment naming `interpreter`.
+pub fn elf_with_interpreter(entries: &[(u64, &str)], interpreter: &str) -> Vec<u8> {
+    elf_image(entries, LOAD_ADDRESS, Some(interpreter))
 }
 
 /// [`elf`], but `DT_STRTAB` points outside the file's one `PT_LOAD` segment, so the strings cannot be read.
 pub fn elf_with_unmapped_strtab(entries: &[(u64, &str)]) -> Vec<u8> {
-    elf_with_strtab_at(entries, LOAD_ADDRESS + 0x1000_0000)
+    elf_image(entries, LOAD_ADDRESS + 0x1000_0000, None)
 }
 
-fn elf_with_strtab_at(entries: &[(u64, &str)], base: u64) -> Vec<u8> {
+fn elf_image(entries: &[(u64, &str)], base: u64, interpreter: Option<&str>) -> Vec<u8> {
     let mut dynstr = vec![0u8];
     let mut offsets = Vec::new();
     for (_, value) in entries {
@@ -40,8 +45,17 @@ fn elf_with_strtab_at(entries: &[(u64, &str)], base: u64) -> Vec<u8> {
         dynstr.push(0);
     }
     let have_dynamic = !entries.is_empty();
-    let phnum: u16 = if have_dynamic { 2 } else { 0 };
-    let dynstr_off = 64 + 56 * phnum as usize;
+    let phnum: u16 = match (have_dynamic, interpreter.is_some()) {
+        (false, false) => 0,
+        (true, false) | (false, true) => 2,
+        (true, true) => 3,
+    };
+    let interp_off = 64 + 56 * phnum as usize;
+    let mut interp = interpreter.map(|name| name.as_bytes().to_vec()).unwrap_or_default();
+    if interpreter.is_some() {
+        interp.push(0);
+    }
+    let dynstr_off = interp_off + interp.len();
     let dynamic_off = (dynstr_off + dynstr.len()).next_multiple_of(8);
 
     let mut dynamic = Vec::new();
@@ -69,11 +83,14 @@ fn elf_with_strtab_at(entries: &[(u64, &str)], base: u64) -> Vec<u8> {
     put(&mut img, 54, &56u16.to_le_bytes()); // e_phentsize
     put(&mut img, 56, &phnum.to_le_bytes());
     put(&mut img, 58, &64u16.to_le_bytes()); // e_shentsize
-    if !have_dynamic {
+    if phnum == 0 {
         return img;
     }
-    put(&mut img, dynstr_off, &dynstr);
-    put(&mut img, dynamic_off, &dynamic);
+    put(&mut img, interp_off, &interp);
+    if have_dynamic {
+        put(&mut img, dynstr_off, &dynstr);
+        put(&mut img, dynamic_off, &dynamic);
+    }
     let len = img.len() as u64;
     let segment = |kind: u32, offset: u64, size: u64| {
         let mut h = [0u8; 56];
@@ -85,8 +102,16 @@ fn elf_with_strtab_at(entries: &[(u64, &str)], base: u64) -> Vec<u8> {
         h[40..48].copy_from_slice(&size.to_le_bytes());
         h
     };
-    put(&mut img, 64, &segment(1, 0, len)); // PT_LOAD
-    put(&mut img, 64 + 56, &segment(2, dynamic_off as u64, dynamic.len() as u64)); // PT_DYNAMIC
+    let mut headers = vec![segment(1, 0, len)]; // PT_LOAD
+    if interpreter.is_some() {
+        headers.push(segment(3, interp_off as u64, interp.len() as u64)); // PT_INTERP
+    }
+    if have_dynamic {
+        headers.push(segment(2, dynamic_off as u64, dynamic.len() as u64)); // PT_DYNAMIC
+    }
+    for (i, header) in headers.iter().enumerate() {
+        put(&mut img, 64 + 56 * i, header);
+    }
     img
 }
 

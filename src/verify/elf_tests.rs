@@ -1,4 +1,4 @@
-use super::crafted::{elf, elf_with_unmapped_strtab, DT_NEEDED, DT_RPATH, DT_RUNPATH};
+use super::crafted::{elf, elf_with_interpreter, elf_with_unmapped_strtab, DT_NEEDED, DT_RPATH, DT_RUNPATH};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -78,6 +78,36 @@ fn needed_libraries_named_by_a_relative_path_are_reported() {
 fn needed_libraries_named_bare_or_by_an_absolute_path_pass() {
     assert_eq!(
         kinds(&elf(&[(DT_NEEDED, "libc.so.6"), (DT_NEEDED, "/usr/lib/libx.so")])),
+        vec![]
+    );
+}
+
+#[test]
+fn a_relative_interpreter_is_reported() {
+    for name in ["ld.so", "lib/ld.so", "./ld.so", "$ORIGIN/ld.so", ""] {
+        assert_eq!(
+            kinds(&elf_with_interpreter(&[(DT_NEEDED, "libc.so.6")], name)),
+            vec![ViolationKind::ElfInterpreter],
+            "{name:?}"
+        );
+    }
+}
+
+#[test]
+fn a_relative_interpreter_is_reported_without_a_dynamic_section() {
+    assert_eq!(
+        kinds(&elf_with_interpreter(&[], "lib/ld.so")),
+        vec![ViolationKind::ElfInterpreter]
+    );
+}
+
+#[test]
+fn an_absolute_interpreter_passes() {
+    assert_eq!(
+        kinds(&elf_with_interpreter(
+            &[(DT_NEEDED, "libc.so.6")],
+            "/lib64/ld-linux-x86-64.so.2"
+        )),
         vec![]
     );
 }

@@ -38,6 +38,9 @@ pub enum ViolationKind {
     /// ELF: a `DT_NEEDED` entry that contains a `/` but does not start with one. The loader opens it relative to
     /// the working directory.
     ElfNeeded,
+    /// ELF: a `PT_INTERP` (the program interpreter) that does not start with `/`. The kernel opens it relative
+    /// to the working directory.
+    ElfInterpreter,
     /// Mach-O: an `LC_RPATH` command.
     MachoRpath,
     /// Mach-O: a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based, or relative.

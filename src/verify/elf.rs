@@ -1,10 +1,10 @@
-//! ELF rules: no `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative, and no `DT_NEEDED` that is a
-//! relative path.
+//! ELF rules: no `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative, and no `DT_NEEDED` or
+//! `PT_INTERP` that is a relative path.
 //!
 //! The loader searches the executable's folder only when asked to, and `$ORIGIN` (or a relative path, resolved
 //! against the working directory) is how a binary asks. Every element must be an absolute path. A `DT_NEEDED`
 //! name with a `/` in it is opened as a path, so it too must be absolute; one without is looked up on the
-//! search paths.
+//! search paths. The program interpreter (`PT_INTERP`) is always opened as a path.
 //!
 //! The dynamic entries are read through the `PT_DYNAMIC` segment, as the loader reads them, and not through
 //! the section headers, which a stripped or hand-linked binary may lack or falsify.
@@ -22,6 +22,21 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
     let header = Elf::parse(data).map_err(unreadable)?;
     let endian = header.endian().map_err(unreadable)?;
     let segments = header.program_headers(endian, data).map_err(unreadable)?;
+
+    for segment in segments.iter() {
+        let Some(interpreter) = segment.interpreter(endian, data).map_err(unreadable)? else {
+            continue;
+        };
+        if !interpreter.starts_with(b"/") {
+            out.push(Violation {
+                kind: ViolationKind::ElfInterpreter,
+                detail: format!(
+                    "PT_INTERP {:?} is a relative path, opened against the working directory",
+                    String::from_utf8_lossy(interpreter)
+                ),
+            });
+        }
+    }
 
     let Some(entries) = segments
         .iter()
