@@ -1,4 +1,5 @@
-use super::hardens;
+use super::{compile_initializer, hardens};
+use std::path::Path;
 
 #[test]
 fn msvc_windows_is_hardened() {
@@ -22,6 +23,16 @@ fn cygwin_is_refused_with_the_reason() {
             "{env}: {message}"
         );
     }
+}
+
+/// Whatever made rustc fail, the message must be true, so it states the one known limit and not a cause.
+#[test]
+#[should_panic(
+    expected = "compiling libsearch-guard's initializer for no-such-target failed (rustc's error is above). A target with no prebuilt `core` (tier 3, -Zbuild-std) is not supported."
+)]
+fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    compile_initializer("no-such-target", dir.path(), Path::new("rustc"));
 }
 
 #[test]

@@ -53,8 +53,8 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// - On a Windows target that is not `*-windows-msvc`, or on Cygwin (whose executables are PE files loaded by
 ///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened, and a bin that
 ///   silently is not would be worse than a failed build.
-/// - If compiling the initializer fails. It needs a prebuilt `core` for the target, so tier 3 targets and
-///   `-Zbuild-std` builds are not supported.
+/// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
+///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
     match hardens(&var("CARGO_CFG_TARGET_OS"), &var("CARGO_CFG_TARGET_ENV")) {
         Ok(true) => {}
@@ -130,7 +130,7 @@ fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
         .unwrap_or_else(|e| panic!("libsearch-guard: cannot run {}: {e}", rustc.display()));
     assert!(
         status.success(),
-        "libsearch-guard: compiling the initializer failed ({status}): the initializer needs a prebuilt `core` for {target}; tier-3 and -Zbuild-std targets are not supported (see the README, Platform notes)"
+        "libsearch-guard: compiling libsearch-guard's initializer for {target} failed (rustc's error is above). A target with no prebuilt `core` (tier 3, -Zbuild-std) is not supported."
     );
     object
 }
