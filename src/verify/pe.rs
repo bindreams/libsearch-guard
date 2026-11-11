@@ -150,7 +150,14 @@ fn msvcp_suffix(suffix: &str) -> bool {
         || numbered_suffix(suffix)
         || matches!(
             suffix,
-            "_atomic_wait" | "_codecvt_ids" | "d_atomic_wait" | "d_codecvt_ids"
+            "_atomic_wait"
+                | "_codecvt_ids"
+                | "d_atomic_wait"
+                | "d_codecvt_ids"
+                | "_atomic_wait_app"
+                | "_codecvt_ids_app"
+                | "d_atomic_wait_app"
+                | "d_codecvt_ids_app"
         )
 }
 

@@ -172,6 +172,10 @@ fn the_uwp_runtimes_are_reported() {
         "vcruntime140d_app.dll",
         "msvcp140_app.dll",
         "msvcp140d_app.dll",
+        "msvcp140_atomic_wait_app.dll",
+        "msvcp140_codecvt_ids_app.dll",
+        "msvcp140d_atomic_wait_app.dll",
+        "msvcp140d_codecvt_ids_app.dll",
         "vccorlib140_app.dll",
         "vccorlib140d_app.dll",
         "concrt140_app.dll",
@@ -192,6 +196,9 @@ fn an_app_suffix_on_a_windows_dll_or_an_unknown_variant_is_not_reported() {
         "mfc140_app.dll",
         "vcruntime140_apps.dll",
         "vcruntime140__app.dll",
+        "vcruntime140_atomic_wait_app.dll",
+        "msvcp140_atomic_wait_apps.dll",
+        "msvcp140_atomic_wait__app.dll",
     ] {
         assert_eq!(runtime_import_kinds(dll), vec![], "{dll}");
     }
