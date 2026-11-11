@@ -112,7 +112,7 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
         let value = entry.string(endian, strings).map_err(unreadable)?;
         let value = utf8(name, value)?;
         if tag == DT_NEEDED {
-            if is_relative_path(&value) {
+            if is_relative_path(value) {
                 out.push(Violation {
                     kind: ViolationKind::ElfNeeded,
                     detail: format!("{name} {value:?} is a relative path, opened against the working directory"),
