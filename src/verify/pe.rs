@@ -10,18 +10,22 @@ use super::{unreadable, Violation, ViolationKind};
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
 
 /// Name prefixes (lower case) of the Visual C++ redistributable DLLs: they are not in System32, so an import
-/// is searched for in the executable's folder first. `msvcp_win.dll` is part of Windows and is not one of
-/// them, which is why the C++ standard library is matched by its version digit.
-const REDISTRIBUTABLE_PREFIXES: [&str; 8] = [
-    "vcruntime",
-    "msvcp1",
-    "msvcp2",
-    "concrt",
-    "vcomp",
-    "vccorlib",
-    "vcamp",
-    "mfc",
-];
+/// is searched for in the executable's folder first.
+const REDISTRIBUTABLE_PREFIXES: [&str; 7] = ["vcruntime", "concrt", "vcomp", "vccorlib", "vcamp", "mfc", "ucrtbased"];
+
+/// Like [`REDISTRIBUTABLE_PREFIXES`], but a name matches only when a version digit follows: `msvcp_win.dll`,
+/// `msvcrt.dll` (a KnownDLL) and `atl.dll` are part of Windows, and the redistributable ones are `msvcp140`,
+/// `msvcr100`, `atl100`.
+const VERSIONED_PREFIXES: [&str; 3] = ["msvcp", "msvcr", "atl"];
+
+fn is_redistributable(lower: &str) -> bool {
+    REDISTRIBUTABLE_PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
+        || VERSIONED_PREFIXES.iter().any(|prefix| {
+            lower
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
+}
 
 pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -> Result<(), super::VerifyError> {
     let file = PeFile::<Pe, _>::parse(data).map_err(unreadable)?;
@@ -40,7 +44,7 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
             let name = imports.name(descriptor.name.get(LE)).map_err(unreadable)?;
             let name = String::from_utf8_lossy(name);
             let lower = name.to_ascii_lowercase();
-            if REDISTRIBUTABLE_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) {
+            if is_redistributable(&lower) {
                 out.push(Violation {
                     kind: ViolationKind::PeRuntimeImport,
                     detail: format!("imports {name}, which is searched for in the executable's folder first"),
