@@ -3,7 +3,7 @@
 use libsearch_guard::{verify, VerifyError, ViolationKind};
 
 #[cfg(windows)]
-use crate::fixtures::{file_of, hardened_probe_artifacts};
+use crate::fixtures::{file_of, hardened_probe_artifacts, hardened_probe_bench_harness};
 use crate::fixtures::{probe, Probe};
 
 fn violation_kinds(error: VerifyError) -> Vec<ViolationKind> {
@@ -42,14 +42,29 @@ fn a_probe_with_an_executable_path_rpath_is_reported() {
     assert_eq!(kinds, vec![ViolationKind::MachoRpath]);
 }
 
-/// `bins()` hardens the package's bins and nothing else: its test target links without the initializer,
-/// the static runtime or the load flag.
+/// `bins()` hardens each `[[bin]]`, its test and bench harnesses included (a bin's tests are the bin's own
+/// code), and nothing else: the package's library and `cdylib`, integration tests and examples link without
+/// the initializer, the static runtime or the load flag.
 #[cfg(windows)]
 #[test]
-fn a_test_target_of_a_hardened_package_is_not_hardened() {
-    let kinds = violation_kinds(verify(file_of(hardened_probe_artifacts(), "scope", "test", true)).unwrap_err());
-    assert_eq!(
-        kinds,
-        vec![ViolationKind::PeDependentLoadFlags, ViolationKind::PeRuntimeImport]
-    );
+fn only_the_bins_and_their_own_harnesses_are_hardened() {
+    let artifacts = hardened_probe_artifacts();
+    for (target, kind, harness) in [("probe", "bin", false), ("probe", "bin", true)] {
+        verify(file_of(artifacts, target, kind, harness))
+            .unwrap_or_else(|e| panic!("{target} ({kind}, harness: {harness}) is not hardened: {e}"));
+    }
+    verify(hardened_probe_bench_harness()).unwrap_or_else(|e| panic!("the bin's bench harness is not hardened: {e}"));
+    for (target, kind, harness) in [
+        ("probe_lib", "lib", true),
+        ("probe_lib", "cdylib", false),
+        ("scope", "test", true),
+        ("sidecar", "example", false),
+    ] {
+        let kinds = violation_kinds(verify(file_of(artifacts, target, kind, harness)).unwrap_err());
+        assert_eq!(
+            kinds,
+            vec![ViolationKind::PeDependentLoadFlags, ViolationKind::PeRuntimeImport],
+            "{target} ({kind}, harness: {harness})"
+        );
+    }
 }

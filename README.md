@@ -25,7 +25,7 @@ fn main() {
 }
 ```
 
-That is all. The package's `[[bin]]` targets are hardened; its libraries, tests, benches, examples and `cdylib`s are not. Call `bins()` only from a package that has a `[[bin]]`: cargo rejects the link arguments otherwise.
+That is all. Every `[[bin]]` of the package is hardened, including the bin's own unit-test and bench harness. Its library, integration tests, examples and `cdylib`s are not. Call `bins()` only from a package that has a `[[bin]]`: cargo rejects the link arguments otherwise.
 
 On `windows` + `msvc` targets every `[[bin]]` gets:
 

@@ -122,6 +122,21 @@ pub fn hardened_probe_artifacts() -> &'static [Artifact] {
     })
 }
 
+/// The harness `cargo bench --bins` builds for the hardened probe's bin.
+#[cfg(windows)]
+pub fn hardened_probe_bench_harness() -> &'static Path {
+    static BENCH: OnceLock<PathBuf> = OnceLock::new();
+    BENCH.get_or_init(|| {
+        let artifacts = cargo(
+            &["bench", "--no-run", "--bins"],
+            "probe",
+            "probe-hardened",
+            &[("LIBSEARCH_GUARD_HARDEN_PROBE", "1")],
+        );
+        file_of(&artifacts, "probe", "bin", true).to_owned()
+    })
+}
+
 /// Runs `cargo <subcommand>` on a fixture package in its own target directory and returns the package's
 /// artifacts from cargo's JSON messages. Panics, with cargo's stderr, when cargo fails.
 fn cargo(subcommand: &[&str], package: &str, target_dir_name: &str, envs: &[(&str, &str)]) -> Vec<Artifact> {

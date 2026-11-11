@@ -34,7 +34,8 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///   without flags, including one made inside a system DLL, searches System32 only. If that call fails, the
 ///   process writes the error to stderr and terminates before `main`.
 ///
-/// Libraries, tests, benches, examples and `cdylib`s of the package are not affected. On every other target
+/// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
+/// package's library, integration tests, examples and `cdylib`s are not affected. On every other target
 /// this does nothing.
 ///
 /// Call it only from a package that has a `[[bin]]`: cargo rejects the link arguments otherwise.

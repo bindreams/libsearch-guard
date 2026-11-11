@@ -38,3 +38,9 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_bin_has_a_test_harness() {}
+}
