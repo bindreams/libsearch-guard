@@ -76,7 +76,8 @@ impl fmt::Display for Violation {
 pub enum VerifyError {
     /// The file could not be read.
     Io(std::io::Error),
-    /// The file is not a PE, ELF or Mach-O executable this crate can read.
+    /// The file is not a PE, ELF or Mach-O executable this crate can read, or a slice of a universal binary is
+    /// not a Mach-O image. Violations found before the unreadable part are in the message.
     Unreadable(String),
     /// The file breaks one or more rules; every violation found is listed.
     Violations(Vec<Violation>),
@@ -118,11 +119,18 @@ pub fn verify(path: impl AsRef<Path>) -> Result<(), VerifyError> {
 
 fn verify_bytes(data: &[u8]) -> Result<(), VerifyError> {
     let mut violations = Vec::new();
-    check(data, &mut violations)?;
-    if violations.is_empty() {
-        Ok(())
-    } else {
-        Err(VerifyError::Violations(violations))
+    match check(data, &mut violations) {
+        Ok(()) if violations.is_empty() => Ok(()),
+        Ok(()) => Err(VerifyError::Violations(violations)),
+        // What was found before the unreadable part is not lost.
+        Err(VerifyError::Unreadable(why)) if !violations.is_empty() => {
+            let found: Vec<String> = violations.iter().map(Violation::to_string).collect();
+            Err(VerifyError::Unreadable(format!(
+                "{why}; found before that: {}",
+                found.join("; ")
+            )))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -134,22 +142,30 @@ fn check(data: &[u8], out: &mut Vec<Violation>) -> Result<(), VerifyError> {
         FileKind::Elf64 => elf::check::<FileHeader64<Endianness>>(data, out),
         FileKind::MachO32 => macho::check::<MachHeader32<Endianness>>(data, out),
         FileKind::MachO64 => macho::check::<MachHeader64<Endianness>>(data, out),
-        FileKind::MachOFat32 => {
-            for arch in MachOFatFile32::parse(data).map_err(unreadable)?.arches() {
-                check(arch.data(data).map_err(unreadable)?, out)?;
-            }
-            Ok(())
-        }
-        FileKind::MachOFat64 => {
-            for arch in MachOFatFile64::parse(data).map_err(unreadable)?.arches() {
-                check(arch.data(data).map_err(unreadable)?, out)?;
-            }
-            Ok(())
-        }
+        FileKind::MachOFat32 => check_slices(MachOFatFile32::parse(data).map_err(unreadable)?.arches(), data, out),
+        FileKind::MachOFat64 => check_slices(MachOFatFile64::parse(data).map_err(unreadable)?.arches(), data, out),
         other => Err(VerifyError::Unreadable(format!(
             "{other:?} is not a PE, ELF or Mach-O executable"
         ))),
     }
+}
+
+/// Checks the slices of a universal binary. A slice is a Mach-O image: anything else, a nested universal binary
+/// included, is not something dyld loads from one.
+fn check_slices<A: FatArch>(arches: &[A], data: &[u8], out: &mut Vec<Violation>) -> Result<(), VerifyError> {
+    for arch in arches {
+        let slice = arch.data(data).map_err(unreadable)?;
+        match FileKind::parse(slice).map_err(unreadable)? {
+            FileKind::MachO32 => macho::check::<MachHeader32<Endianness>>(slice, out)?,
+            FileKind::MachO64 => macho::check::<MachHeader64<Endianness>>(slice, out)?,
+            other => {
+                return Err(VerifyError::Unreadable(format!(
+                    "a slice of a universal binary is {other:?}, not a Mach-O image"
+                )))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn unreadable(error: object::Error) -> VerifyError {
