@@ -122,6 +122,40 @@ fn every_redistributable_runtime_is_reported() {
     }
 }
 
+/// The UWP (VCLibs) copies of the runtimes carry an `_app` suffix.
+#[test]
+fn the_uwp_runtimes_are_reported() {
+    for dll in [
+        "vcruntime140_app.dll",
+        "vcruntime140_1_app.dll",
+        "vcruntime140d_app.dll",
+        "msvcp140_app.dll",
+        "msvcp140d_app.dll",
+        "vccorlib140_app.dll",
+        "vccorlib140d_app.dll",
+        "concrt140_app.dll",
+        "vcomp140_app.dll",
+        "vcamp140_app.dll",
+        "VCRUNTIME140_APP.dll",
+    ] {
+        assert_eq!(runtime_import_kinds(dll), vec![ViolationKind::PeRuntimeImport], "{dll}");
+    }
+}
+
+/// `_app` is a suffix of the families that have a UWP copy, and nothing else.
+#[test]
+fn an_app_suffix_on_a_windows_dll_or_an_unknown_variant_is_not_reported() {
+    for dll in [
+        "msvcp_win_app.dll",
+        "msvcr100_app.dll",
+        "mfc140_app.dll",
+        "vcruntime140_apps.dll",
+        "vcruntime140__app.dll",
+    ] {
+        assert_eq!(runtime_import_kinds(dll), vec![], "{dll}");
+    }
+}
+
 #[test]
 fn older_c_runtimes_are_reported() {
     for dll in [

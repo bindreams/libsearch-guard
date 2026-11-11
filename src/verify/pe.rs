@@ -63,22 +63,22 @@ const REDISTRIBUTABLE_FAMILIES: [Family; 10] = [
     Family {
         prefix: "concrt",
         ships_in_windows: &[],
-        suffix: debug_suffix,
+        suffix: uwp_suffix,
     },
     Family {
         prefix: "vcomp",
         ships_in_windows: &[],
-        suffix: debug_suffix,
+        suffix: uwp_suffix,
     },
     Family {
         prefix: "vccorlib",
         ships_in_windows: &[],
-        suffix: debug_suffix,
+        suffix: uwp_suffix,
     },
     Family {
         prefix: "vcamp",
         ships_in_windows: &[],
-        suffix: debug_suffix,
+        suffix: uwp_suffix,
     },
     Family {
         prefix: "mfc",
@@ -110,12 +110,21 @@ fn numbered_suffix(suffix: &str) -> bool {
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// The UWP (VCLibs) copy of a runtime: the debug or numbered forms with `_app` after them, as in
+/// `vcruntime140_1_app` and `msvcp140d_app`.
+fn uwp_suffix(suffix: &str) -> bool {
+    debug_suffix(suffix)
+        || suffix
+            .strip_suffix("_app")
+            .is_some_and(|base| debug_suffix(base) || numbered_suffix(base))
+}
+
 fn vcruntime_suffix(suffix: &str) -> bool {
-    debug_suffix(suffix) || numbered_suffix(suffix) || matches!(suffix, "_threads" | "_threadsd")
+    uwp_suffix(suffix) || numbered_suffix(suffix) || matches!(suffix, "_threads" | "_threadsd")
 }
 
 fn msvcp_suffix(suffix: &str) -> bool {
-    debug_suffix(suffix)
+    uwp_suffix(suffix)
         || numbered_suffix(suffix)
         || matches!(
             suffix,
