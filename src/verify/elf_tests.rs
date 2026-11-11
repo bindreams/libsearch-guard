@@ -1,6 +1,6 @@
 use super::crafted::{
-    elf, elf_with_interpreter, elf_with_unmapped_strtab, DT_AUDIT, DT_AUXILIARY, DT_DEPAUDIT, DT_FILTER, DT_NEEDED,
-    DT_RPATH, DT_RUNPATH,
+    elf, elf_image, elf_with_interpreter, elf_with_unmapped_strtab, Elf, StringTable, DT_AUDIT, DT_AUXILIARY,
+    DT_DEPAUDIT, DT_FILTER, DT_NEEDED, DT_RPATH, DT_RUNPATH,
 };
 use super::{verify_bytes, VerifyError, ViolationKind};
 
@@ -169,4 +169,77 @@ fn loader_libraries_named_bare_or_by_an_absolute_path_pass() {
             "{name}"
         );
     }
+}
+
+/// Every combination of word size and byte order the loader reads.
+const FORMATS: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+#[test]
+fn every_word_size_and_byte_order_is_checked() {
+    for (is_32_bit, is_big_endian) in FORMATS {
+        let image = |entries| {
+            elf_image(&Elf {
+                entries,
+                interpreter: Some("/lib/ld.so"),
+                is_32_bit,
+                is_big_endian,
+                ..Elf::default()
+            })
+        };
+        let bad = [
+            (DT_RUNPATH, "$ORIGIN/lib"),
+            (DT_NEEDED, "lib/libx.so"),
+            (DT_AUDIT, "lib/a.so"),
+        ];
+        assert_eq!(
+            kinds(&image(&bad)),
+            vec![
+                ViolationKind::ElfSearchPath,
+                ViolationKind::ElfNeeded,
+                ViolationKind::ElfLoaderLibrary
+            ],
+            "32 bit: {is_32_bit}, big endian: {is_big_endian}"
+        );
+        assert_eq!(
+            kinds(&image(&[(DT_RUNPATH, "/usr/lib"), (DT_NEEDED, "libc.so.6")])),
+            vec![],
+            "32 bit: {is_32_bit}, big endian: {is_big_endian}"
+        );
+    }
+}
+
+#[test]
+fn a_relative_interpreter_is_reported_in_every_format() {
+    for (is_32_bit, is_big_endian) in FORMATS {
+        let image = elf_image(&Elf {
+            entries: &[(DT_NEEDED, "libc.so.6")],
+            interpreter: Some("ld.so"),
+            is_32_bit,
+            is_big_endian,
+            ..Elf::default()
+        });
+        assert_eq!(kinds(&image), vec![ViolationKind::ElfInterpreter]);
+    }
+}
+
+/// The loader stops at `DT_NULL`, so an entry after it is not a search.
+#[test]
+fn entries_after_the_terminating_null_are_not_read() {
+    let image = elf_image(&Elf {
+        entries: &[(DT_RUNPATH, "/usr/lib")],
+        after_null: &[(DT_RUNPATH, "$ORIGIN"), (DT_NEEDED, "lib/libx.so")],
+        ..Elf::default()
+    });
+    assert_eq!(kinds(&image), vec![]);
+}
+
+/// `DT_STRTAB` is an address; the segment that maps it need not be the first.
+#[test]
+fn a_string_table_in_a_later_load_segment_is_read() {
+    let image = elf_image(&Elf {
+        entries: &[(DT_RUNPATH, "$ORIGIN")],
+        string_table: StringTable::SecondSegment,
+        ..Elf::default()
+    });
+    assert_eq!(kinds(&image), vec![ViolationKind::ElfSearchPath]);
 }
