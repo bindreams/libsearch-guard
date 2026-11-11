@@ -2,6 +2,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(test)]
+#[path = "bins_tests.rs"]
+mod tests;
+
 /// Source of the pre-`main` initializer. Compiled by [`bins`] into the consumer's `OUT_DIR`.
 const INITIALIZER: &str = include_str!("../initializer/pre_main.rs");
 
@@ -44,10 +48,16 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///
 /// # Panics
 ///
-/// If it is not called from a build script, or if compiling the initializer fails.
+/// - If it is not called from a build script.
+/// - On a Windows target that is not `*-windows-msvc`: GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot
+///   be hardened, and a bin that silently is not would be worse than a failed build.
+/// - If compiling the initializer fails. It needs a prebuilt `core` for the target, so tier 3 targets and
+///   `-Zbuild-std` builds are not supported.
 pub fn bins() {
-    if var("CARGO_CFG_TARGET_OS") != "windows" || var("CARGO_CFG_TARGET_ENV") != "msvc" {
-        return;
+    match hardens(&var("CARGO_CFG_TARGET_OS"), &var("CARGO_CFG_TARGET_ENV")) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(message) => panic!("libsearch-guard: {message}"),
     }
     let object = compile_initializer(&var("TARGET"), Path::new(&var("OUT_DIR")), Path::new(&var("RUSTC")));
     println!("cargo:rustc-link-arg-bins={}", object.display());
@@ -64,10 +74,24 @@ pub fn bins() {
     println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
 }
 
+/// Whether `bins()` hardens a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`. An error is
+/// a Windows target it cannot harden.
+fn hardens(os: &str, env: &str) -> Result<bool, String> {
+    match (os, env) {
+        ("windows", "msvc") => Ok(true),
+        ("windows", _) => Err(format!(
+            "only windows-msvc is supported on Windows (this target's env is {env:?}): GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
+        )),
+        _ => Ok(false),
+    }
+}
+
 /// Compiles the initializer to an object file with the build's own `rustc`.
 ///
 /// The object is handed to the linker directly, so it is linked into whichever binary gets the argument and
-/// into nothing else. The consumer's `RUSTFLAGS` are not passed on: the object needs none of them.
+/// into nothing else. The consumer's `RUSTFLAGS` are not passed on: the object needs none of them. That was
+/// measured with `-C control-flow-guard`, the one flag that could matter, since the CRT calls the initializer
+/// through a function pointer: it runs the same with and without the flag, so nothing needs passing on.
 fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
     let source = out_dir.join("libsearch_guard_pre_main.rs");
     let object = out_dir.join("libsearch_guard_pre_main.obj");
@@ -100,7 +124,7 @@ fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
         .unwrap_or_else(|e| panic!("libsearch-guard: cannot run {}: {e}", rustc.display()));
     assert!(
         status.success(),
-        "libsearch-guard: compiling the initializer for {target} failed ({status})"
+        "libsearch-guard: compiling the initializer failed ({status}): the initializer needs a prebuilt `core` for {target}; tier-3 and -Zbuild-std targets are not supported (see the README, Platform notes)"
     );
     object
 }

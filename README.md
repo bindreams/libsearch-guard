@@ -35,7 +35,7 @@ On `windows` + `msvc` targets every `[[bin]]` gets:
 
 The call in item 3 comes from a tiny `#![no_std]` object that `bins()` compiles with the build's own `rustc` into `OUT_DIR` and hands to the linker for the bins. It needs no C compiler and adds no code or dependency to the consumer's crates.
 
-On every other target `bins()` does nothing, because the loader already behaves, and `verify` checks that the binary has not opted out.
+On targets that are not Windows, `bins()` does nothing: the loader searches the executable's folder only when the binary asks, and `verify` checks that it has not. Other Windows targets are refused: see Platform notes.
 
 ## Loading a sidecar DLL
 
@@ -65,7 +65,8 @@ ELF files are read through their `PT_DYNAMIC` segment, as the loader reads them,
 
 ## Platform notes
 
-- `x86_64-pc-windows-gnu` and other non-MSVC Windows targets get nothing: the link arguments are MSVC linker options.
+- **Windows targets other than MSVC** (`windows-gnu`, `windows-gnullvm`): `bins()` fails the build. GNU ld has no `DEPENDENTLOADFLAG`, and the loader on those targets still searches the executable's folder, so the crate refuses rather than build a bin that looks hardened and is not. There is no switch to skip it.
+- **MSVC targets without a prebuilt `core`** (tier 3 targets, `-Zbuild-std`): `bins()` fails the build. The initializer is compiled with the build's own `rustc` against the target's prebuilt `core`.
 - The library itself is not hardened: it ships no initializer and links no runtime tricks, so depending on it for `verify` changes nothing about the tests that use it.
 
 ## License
