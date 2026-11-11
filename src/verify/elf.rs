@@ -1,15 +1,20 @@
-//! ELF rules: no `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative, and no `DT_NEEDED` or
-//! `PT_INTERP` that is a relative path.
+//! ELF rules: no `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative, no `DT_NEEDED` or `PT_INTERP`
+//! that is a relative path, and no audit library or filtee (`DT_AUDIT`, `DT_DEPAUDIT`, `DT_FILTER`,
+//! `DT_AUXILIARY`) that is `$ORIGIN`-based or a relative path.
 //!
 //! The loader searches the executable's folder only when asked to, and `$ORIGIN` (or a relative path, resolved
 //! against the working directory) is how a binary asks. Every element must be an absolute path. A `DT_NEEDED`
 //! name with a `/` in it is opened as a path, so it too must be absolute; one without is looked up on the
-//! search paths. The program interpreter (`PT_INTERP`) is always opened as a path.
+//! search paths. Audit libraries and filtees are named the same way, in `:`-separated lists. The program
+//! interpreter (`PT_INTERP`) is always opened as a path.
 //!
 //! The dynamic entries are read through the `PT_DYNAMIC` segment and not through the section headers, which a
 //! stripped or hand-linked binary may lack or falsify.
 
-use object::elf::{DynamicTag, DT_NEEDED, DT_NULL, DT_RPATH, DT_RUNPATH, DT_STRSZ, DT_STRTAB, PT_DYNAMIC, PT_LOAD};
+use object::elf::{
+    DynamicTag, DT_AUDIT, DT_AUXILIARY, DT_DEPAUDIT, DT_FILTER, DT_NEEDED, DT_NULL, DT_RPATH, DT_RUNPATH, DT_STRSZ,
+    DT_STRTAB, PT_DYNAMIC, PT_LOAD,
+};
 use object::read::elf::{Dyn, FileHeader, ProgramHeader};
 use object::read::StringTable;
 
@@ -54,7 +59,12 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
         .take_while(|entry| entry.tag(endian) != DT_NULL)
         .collect();
 
-    let reads_strings = |tag: DynamicTag| matches!(tag, DT_RPATH | DT_RUNPATH | DT_NEEDED);
+    let reads_strings = |tag: DynamicTag| {
+        matches!(
+            tag,
+            DT_RPATH | DT_RUNPATH | DT_NEEDED | DT_AUDIT | DT_DEPAUDIT | DT_FILTER | DT_AUXILIARY
+        )
+    };
     if !entries.iter().any(|entry| reads_strings(entry.tag(endian))) {
         return Ok(());
     }
@@ -94,16 +104,31 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
             DT_RPATH => "RPATH",
             DT_RUNPATH => "RUNPATH",
             DT_NEEDED => "DT_NEEDED",
+            DT_AUDIT => "DT_AUDIT",
+            DT_DEPAUDIT => "DT_DEPAUDIT",
+            DT_FILTER => "DT_FILTER",
+            DT_AUXILIARY => "DT_AUXILIARY",
             _ => continue,
         };
         let value = entry.string(endian, strings).map_err(unreadable)?;
         let value = String::from_utf8_lossy(value);
         if tag == DT_NEEDED {
-            if value.contains('/') && !value.starts_with('/') {
+            if is_relative_path(&value) {
                 out.push(Violation {
                     kind: ViolationKind::ElfNeeded,
                     detail: format!("{name} {value:?} is a relative path, opened against the working directory"),
                 });
+            }
+            continue;
+        }
+        if matches!(tag, DT_AUDIT | DT_DEPAUDIT | DT_FILTER | DT_AUXILIARY) {
+            for element in value.split(':').filter(|element| !element.is_empty()) {
+                if element.contains("$ORIGIN") || element.contains("${ORIGIN}") || is_relative_path(element) {
+                    out.push(Violation {
+                        kind: ViolationKind::ElfLoaderLibrary,
+                        detail: format!("{name} element {element:?} is `$ORIGIN`-based or a relative path"),
+                    });
+                }
             }
             continue;
         }
@@ -115,4 +140,9 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
         }
     }
     Ok(())
+}
+
+/// A name with a `/` in it is opened as a path, so a relative one is resolved against the working directory.
+fn is_relative_path(name: &str) -> bool {
+    name.contains('/') && !name.starts_with('/')
 }

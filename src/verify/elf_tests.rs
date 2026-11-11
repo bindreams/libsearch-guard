@@ -1,4 +1,7 @@
-use super::crafted::{elf, elf_with_interpreter, elf_with_unmapped_strtab, DT_NEEDED, DT_RPATH, DT_RUNPATH};
+use super::crafted::{
+    elf, elf_with_interpreter, elf_with_unmapped_strtab, DT_AUDIT, DT_AUXILIARY, DT_DEPAUDIT, DT_FILTER, DT_NEEDED,
+    DT_RPATH, DT_RUNPATH,
+};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -118,4 +121,52 @@ fn a_string_table_that_no_segment_maps_is_refused_not_passed() {
         verify_bytes(&elf_with_unmapped_strtab(&[(DT_RUNPATH, "$ORIGIN")])),
         Err(VerifyError::Unreadable(_))
     ));
+}
+
+/// The loader maps these libraries too: audit libraries (`DT_AUDIT`, `DT_DEPAUDIT`) and filtees (`DT_FILTER`,
+/// `DT_AUXILIARY`). Each holds a `:`-separated list, and an element with a `/` is opened as a path.
+const LOADER_TAGS: [(u64, &str); 4] = [
+    (DT_AUDIT, "DT_AUDIT"),
+    (DT_DEPAUDIT, "DT_DEPAUDIT"),
+    (DT_FILTER, "DT_FILTER"),
+    (DT_AUXILIARY, "DT_AUXILIARY"),
+];
+
+#[test]
+fn loader_libraries_named_by_a_relative_or_origin_based_path_are_reported() {
+    for (tag, name) in LOADER_TAGS {
+        for value in [
+            "lib/libx.so",
+            "./libx.so",
+            "$ORIGIN/libx.so",
+            "${ORIGIN}/libx.so",
+            "$ORIGIN",
+            "/usr/lib/liby.so:lib/libx.so",
+        ] {
+            assert_eq!(
+                kinds(&elf(&[(tag, value)])),
+                vec![ViolationKind::ElfLoaderLibrary],
+                "{name} {value}"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_offending_loader_library_element_is_reported() {
+    assert_eq!(
+        kinds(&elf(&[(DT_AUDIT, "$ORIGIN/a.so:lib/b.so:/usr/lib/c.so")])),
+        vec![ViolationKind::ElfLoaderLibrary; 2]
+    );
+}
+
+#[test]
+fn loader_libraries_named_bare_or_by_an_absolute_path_pass() {
+    for (tag, name) in LOADER_TAGS {
+        assert_eq!(
+            kinds(&elf(&[(tag, "libaudit.so:/usr/lib/libx.so"), (tag, "")])),
+            vec![],
+            "{name}"
+        );
+    }
 }

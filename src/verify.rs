@@ -43,6 +43,9 @@ pub enum ViolationKind {
     /// ELF: a `DT_NEEDED` entry that contains a `/` but does not start with one. The loader opens it relative to
     /// the working directory.
     ElfNeeded,
+    /// ELF: an element of `DT_AUDIT`, `DT_DEPAUDIT`, `DT_FILTER` or `DT_AUXILIARY` (libraries the loader maps) that
+    /// is `$ORIGIN`-based or a relative path.
+    ElfLoaderLibrary,
     /// ELF: a `PT_INTERP` (the program interpreter) that does not start with `/`. The kernel opens it relative
     /// to the working directory.
     ElfInterpreter,

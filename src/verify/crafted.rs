@@ -13,6 +13,10 @@ pub fn put(buf: &mut Vec<u8>, at: usize, bytes: &[u8]) {
 pub const DT_NEEDED: u64 = 1;
 pub const DT_RPATH: u64 = 15;
 pub const DT_RUNPATH: u64 = 29;
+pub const DT_DEPAUDIT: u64 = 0x6fff_fefb;
+pub const DT_AUDIT: u64 = 0x6fff_fefc;
+pub const DT_AUXILIARY: u64 = 0x7fff_fffd;
+pub const DT_FILTER: u64 = 0x7fff_ffff;
 
 const DT_STRTAB: u64 = 5;
 const DT_STRSZ: u64 = 10;
