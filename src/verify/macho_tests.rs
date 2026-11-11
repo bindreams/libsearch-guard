@@ -150,6 +150,16 @@ fn a_slice_that_is_not_a_macho_image_is_unreadable() {
     }
 }
 
+/// A universal binary with no slice has nothing dyld could load, and nothing to check: it is not a pass.
+#[test]
+fn a_universal_binary_with_no_slices_is_unreadable() {
+    // Padded: the file kind is read from the first 16 bytes.
+    let mut image = macho_fat(&[]);
+    image.resize(16, 0);
+    let result = verify_bytes(&image);
+    assert!(matches!(result, Err(VerifyError::Unreadable { .. })), "{result:?}");
+}
+
 /// A universal header whose one slice is the whole file, itself.
 #[test]
 fn a_universal_binary_that_contains_itself_is_unreadable() {

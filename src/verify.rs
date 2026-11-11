@@ -175,9 +175,12 @@ fn check(data: &[u8], out: &mut Vec<Violation>) -> Result<(), VerifyError> {
     }
 }
 
-/// Checks the slices of a universal binary. A slice is a Mach-O image: anything else, a nested universal binary
+/// Checks the slices of a universal binary, of which there must be at least one. A slice is a Mach-O image: anything else, a nested universal binary
 /// included, is not something dyld loads from one.
 fn check_slices<A: FatArch>(arches: &[A], data: &[u8], out: &mut Vec<Violation>) -> Result<(), VerifyError> {
+    if arches.is_empty() {
+        return Err(VerifyError::unreadable("a universal binary has no slices"));
+    }
     for arch in arches {
         let slice = arch.data(data).map_err(unreadable)?;
         match FileKind::parse(slice).map_err(unreadable)? {
