@@ -1,6 +1,8 @@
 //! Usage: `probe <dll> <flagless|app|app_system32>`.
 //!
-//! Loads `<dll>` by bare name, the way a program loads a sidecar, and exits 0 if it loaded. Windows only.
+//! Loads `<dll>` by bare name, the way a program loads a sidecar. Windows only.
+//!
+//! Exits 0 and prints `loaded` if it loaded. Otherwise exits 1 and prints `error <GetLastError()>`.
 
 #[cfg(windows)]
 fn main() {
@@ -30,7 +32,8 @@ fn main() {
         }
     };
     if module.is_null() {
-        println!("failed: {}", std::io::Error::last_os_error());
+        let error = std::io::Error::last_os_error();
+        println!("error {}: {error}", error.raw_os_error().unwrap_or_default());
         std::process::exit(1);
     }
     println!("loaded");

@@ -7,9 +7,13 @@ use std::process::Command;
 
 use crate::fixtures::{planted, probe, Probe, Runtime};
 
+/// `LoadLibrary`'s error for a DLL, or one of its dependencies, that the search did not find.
+const ERROR_MOD_NOT_FOUND: u32 = 126;
+
 /// Runs `probe_exe` from a scratch folder holding `planted.dll` (a copy of `dll`) and returns whether the DLL
-/// loaded. Both folders are removed when this returns, panic or not. The probe's working directory is a
-/// different empty folder, so only the executable's folder can explain a load.
+/// loaded. A load that fails with anything but `ERROR_MOD_NOT_FOUND` is not a refusal and panics. Both
+/// folders are removed when this returns, panic or not. The probe's working directory is a different empty
+/// folder, so only the executable's folder can explain a load.
 fn loads(probe_exe: &Path, dll: &Path, mode: &str) -> bool {
     let app_dir = tempfile::tempdir().unwrap();
     let work_dir = tempfile::tempdir().unwrap();
@@ -21,11 +25,23 @@ fn loads(probe_exe: &Path, dll: &Path, mode: &str) -> bool {
         .current_dir(work_dir.path())
         .output()
         .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     match output.status.code() {
         Some(0) => true,
-        Some(1) => false,
+        Some(1) => {
+            let error = stdout
+                .strip_prefix("error ")
+                .and_then(|rest| rest.split(':').next())
+                .and_then(|code| code.parse::<u32>().ok());
+            assert_eq!(
+                error,
+                Some(ERROR_MOD_NOT_FOUND),
+                "the load failed, but not with ERROR_MOD_NOT_FOUND; probe stdout: {stdout}"
+            );
+            false
+        }
         other => panic!(
-            "probe failed unexpectedly ({other:?}): {}",
+            "probe failed unexpectedly ({other:?}): {stdout}{}",
             String::from_utf8_lossy(&output.stderr)
         ),
     }
