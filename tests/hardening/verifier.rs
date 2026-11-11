@@ -3,7 +3,7 @@
 use libsearch_guard::{verify, VerifyError, ViolationKind};
 
 #[cfg(windows)]
-use crate::fixtures::hardened_probe_test_target;
+use crate::fixtures::{file_of, hardened_probe_artifacts};
 use crate::fixtures::{probe, Probe};
 
 fn violation_kinds(error: VerifyError) -> Vec<ViolationKind> {
@@ -47,7 +47,7 @@ fn a_probe_with_an_executable_path_rpath_is_reported() {
 #[cfg(windows)]
 #[test]
 fn a_test_target_of_a_hardened_package_is_not_hardened() {
-    let kinds = violation_kinds(verify(hardened_probe_test_target()).unwrap_err());
+    let kinds = violation_kinds(verify(file_of(hardened_probe_artifacts(), "scope", "test", true)).unwrap_err());
     assert_eq!(
         kinds,
         vec![ViolationKind::PeDependentLoadFlags, ViolationKind::PeRuntimeImport]
