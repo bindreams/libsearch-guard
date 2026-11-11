@@ -45,6 +45,10 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it fails the build (see
 /// Panics).
 ///
+/// `+crt-static` is detected through the target features cargo reports to the build script: `RUSTFLAGS` and
+/// the target config set them, but `cargo rustc -- -C target-feature=+crt-static` reaches the final crate
+/// only and is not seen. The static-CRT arguments are then emitted and make the Universal CRT dynamic.
+///
 /// Call it only from a package that has a `[[bin]]`: cargo rejects the link arguments otherwise.
 ///
 /// # Panics

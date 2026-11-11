@@ -67,6 +67,7 @@ ELF files are read through their `PT_DYNAMIC` segment, as the loader reads them,
 
 - **Windows targets other than MSVC** (`windows-gnu`, `windows-gnullvm`) **and Cygwin** (`target_os = "cygwin"`, whose executables are PE files loaded by the Windows loader): `bins()` fails the build. GNU ld has no `DEPENDENTLOADFLAG`, and the loader on those targets still searches the executable's folder, so the crate refuses rather than build a bin that looks hardened and is not. There is no switch to skip it.
 - **MSVC targets without a prebuilt `core`** (tier 3 targets, `-Zbuild-std`): `bins()` fails the build. The initializer is compiled with the build's own `rustc` against the target's prebuilt `core`.
+- **`+crt-static` passed only to the final crate**: `bins()` detects `+crt-static` through the target features cargo reports to the build script, which `RUSTFLAGS` and the target config set. `cargo rustc -- -C target-feature=+crt-static` reaches the final crate only and is not seen: the static-CRT link arguments are then emitted and make the Universal CRT dynamic.
 - The library itself is not hardened: it ships no initializer and links no runtime tricks, so depending on it for `verify` changes nothing about the tests that use it.
 
 ## License
