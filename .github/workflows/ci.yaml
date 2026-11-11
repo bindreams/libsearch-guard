@@ -133,7 +133,9 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           pin-file: .github/release-toolchain
-          targets: ${{ matrix.target }}
+          # The Windows targets too: a unit test compiles the pre-`main` initializer for each architecture it
+          # traps on.
+          targets: ${{ matrix.target }},x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc,arm64ec-pc-windows-msvc
 
       - name: Build workspace
         run: cargo build --workspace --target ${{ matrix.target }}

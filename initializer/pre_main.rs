@@ -40,18 +40,29 @@ unsafe fn report(message: &[u8]) {
     }
 }
 
-/// Ends the process without returning, whatever `TerminateProcess` did: a fast-fail trap, which the OS handles
-/// itself and no exception handler can intercept, or an endless loop where this architecture has no trap here.
+/// Ends the process without returning, whatever `TerminateProcess` did: a fast-fail trap (`__fastfail`), which the
+/// OS handles itself and no exception handler can intercept. Every Windows MSVC architecture has one (x86, x64,
+/// ARM64, ARM64EC, ARM32); an endless loop stands in only where a new architecture has none here.
 unsafe fn fail_fast() -> ! {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         core::arch::asm!("int 0x29", in("ecx") FAST_FAIL_FATAL_APP_EXIT, options(noreturn, nostack));
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
     {
         core::arch::asm!("brk #0xF003", in("x0") FAST_FAIL_FATAL_APP_EXIT, options(noreturn, nostack));
     }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(target_arch = "arm")]
+    {
+        core::arch::asm!("udf #0xFB", in("r0") FAST_FAIL_FATAL_APP_EXIT, options(noreturn, nostack));
+    }
+    #[cfg(not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "arm"
+    )))]
     {
         let _ = FAST_FAIL_FATAL_APP_EXIT;
         loop {}

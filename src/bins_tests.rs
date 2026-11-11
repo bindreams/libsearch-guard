@@ -1,6 +1,7 @@
 use super::{compile_initializer, hardens, plan, unicode, var_os};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[test]
 fn msvc_windows_is_hardened() {
@@ -104,4 +105,61 @@ fn the_source_and_the_object_go_in_out_dir() {
     assert_eq!(Path::new(&initializer.source).parent(), Some(Path::new("out")));
     assert_eq!(Path::new(&initializer.object).parent(), Some(Path::new("out")));
     assert_ne!(initializer.source, initializer.object);
+}
+
+/// The assembly rustc writes for the initializer on `target`, which needs that target's `core`: a test that
+/// cannot compile for it fails, naming it. `LIBSEARCH_GUARD_SKIP_CROSS_TARGET_TESTS=1` is the explicit opt-out.
+fn initializer_assembly(target: &str) -> Option<String> {
+    if std::env::var_os("LIBSEARCH_GUARD_SKIP_CROSS_TARGET_TESTS").is_some() {
+        eprintln!("skipped for {target}: LIBSEARCH_GUARD_SKIP_CROSS_TARGET_TESTS is set");
+        return None;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("pre_main.rs");
+    let assembly = dir.path().join("pre_main.s");
+    std::fs::write(&source, super::INITIALIZER).unwrap();
+    let output = Command::new("rustc")
+        .args([
+            "--edition",
+            "2021",
+            "--crate-type",
+            "lib",
+            "--emit=asm",
+            "--target",
+            target,
+        ])
+        .args(["-C", "panic=abort", "-C", "opt-level=s", "-C", "codegen-units=1"])
+        .arg("-o")
+        .arg(&assembly)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "cannot compile the initializer for {target}: install it with `rustup target add {target}`, or set LIBSEARCH_GUARD_SKIP_CROSS_TARGET_TESTS=1 to skip these tests:
+{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(std::fs::read_to_string(assembly).unwrap())
+}
+
+/// Where `TerminateProcess` has failed, the initializer must not return to the CRT: every Windows MSVC
+/// architecture with a fast-fail trap ends in it, not in a loop.
+#[test]
+fn the_initializer_ends_in_a_fast_fail_trap_on_every_architecture_that_has_one() {
+    for (target, trap) in [
+        ("x86_64-pc-windows-msvc", "int	$41"),
+        ("i686-pc-windows-msvc", "int	$41"),
+        ("aarch64-pc-windows-msvc", "brk	#0xf003"),
+        ("arm64ec-pc-windows-msvc", "brk	#0xf003"),
+    ] {
+        let Some(assembly) = initializer_assembly(target) else {
+            continue;
+        };
+        assert!(
+            assembly.contains(trap),
+            "{target}: no {trap:?} in
+{assembly}"
+        );
+    }
 }
