@@ -123,25 +123,21 @@ fn a_string_table_that_no_segment_maps_is_refused_not_passed() {
     ));
 }
 
-/// The loader maps these libraries too: audit libraries (`DT_AUDIT`, `DT_DEPAUDIT`) and filtees (`DT_FILTER`,
-/// `DT_AUXILIARY`). Each holds a `:`-separated list, and an element with a `/` is opened as a path.
-const LOADER_TAGS: [(u64, &str); 4] = [
-    (DT_AUDIT, "DT_AUDIT"),
-    (DT_DEPAUDIT, "DT_DEPAUDIT"),
-    (DT_FILTER, "DT_FILTER"),
-    (DT_AUXILIARY, "DT_AUXILIARY"),
-];
+/// The loader maps these libraries too. An audit library (`DT_AUDIT`, `DT_DEPAUDIT`) is one element of a
+/// `:`-separated list; a filtee (`DT_FILTER`, `DT_AUXILIARY`) is one name, with no list in it (glibc's
+/// `dl-deps.c` reads `strtab + d_val` as one name). Either is opened as a path when it has a `/`.
+const AUDIT_TAGS: [(u64, &str); 2] = [(DT_AUDIT, "DT_AUDIT"), (DT_DEPAUDIT, "DT_DEPAUDIT")];
+const FILTEE_TAGS: [(u64, &str); 2] = [(DT_FILTER, "DT_FILTER"), (DT_AUXILIARY, "DT_AUXILIARY")];
 
 #[test]
 fn loader_libraries_named_by_a_relative_or_origin_based_path_are_reported() {
-    for (tag, name) in LOADER_TAGS {
+    for (tag, name) in AUDIT_TAGS.into_iter().chain(FILTEE_TAGS) {
         for value in [
             "lib/libx.so",
             "./libx.so",
             "$ORIGIN/libx.so",
             "${ORIGIN}/libx.so",
             "$ORIGIN",
-            "/usr/lib/liby.so:lib/libx.so",
         ] {
             assert_eq!(
                 kinds(&elf(&[(tag, value)])),
@@ -153,18 +149,58 @@ fn loader_libraries_named_by_a_relative_or_origin_based_path_are_reported() {
 }
 
 #[test]
-fn every_offending_loader_library_element_is_reported() {
+fn an_audit_list_is_checked_element_by_element() {
+    for (tag, name) in AUDIT_TAGS {
+        assert_eq!(
+            kinds(&elf(&[(tag, "/usr/lib/liby.so:lib/libx.so")])),
+            vec![ViolationKind::ElfLoaderLibrary],
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn every_offending_audit_element_is_reported() {
     assert_eq!(
         kinds(&elf(&[(DT_AUDIT, "$ORIGIN/a.so:lib/b.so:/usr/lib/c.so")])),
         vec![ViolationKind::ElfLoaderLibrary; 2]
     );
 }
 
+/// A filtee name is not split at a `:`: it is one name, which is relative when it has a `/` and does not start
+/// with one, and is an absolute path (with an odd file name) when it does.
+#[test]
+fn a_filtee_name_is_not_split_at_a_colon() {
+    for (tag, name) in FILTEE_TAGS {
+        assert_eq!(
+            kinds(&elf(&[(tag, "/usr/lib/liby.so:lib/libx.so")])),
+            vec![],
+            "{name}: one absolute name"
+        );
+        let image = elf(&[(tag, "lib/liby.so:/usr/lib/libx.so")]);
+        let Err(VerifyError::Violations(violations)) = verify_bytes(&image) else {
+            panic!("{name}: one relative name passed");
+        };
+        assert_eq!(violations.len(), 1, "{name}: {violations:?}");
+        assert!(
+            violations[0].detail.contains("lib/liby.so:/usr/lib/libx.so"),
+            "{name}: {violations:?}"
+        );
+    }
+}
+
 #[test]
 fn loader_libraries_named_bare_or_by_an_absolute_path_pass() {
-    for (tag, name) in LOADER_TAGS {
+    for (tag, name) in AUDIT_TAGS {
         assert_eq!(
             kinds(&elf(&[(tag, "libaudit.so:/usr/lib/libx.so"), (tag, "")])),
+            vec![],
+            "{name}"
+        );
+    }
+    for (tag, name) in FILTEE_TAGS {
+        assert_eq!(
+            kinds(&elf(&[(tag, "libfiltee.so"), (tag, "/usr/lib/libx.so"), (tag, "")])),
             vec![],
             "{name}"
         );
@@ -251,12 +287,8 @@ fn a_string_that_is_not_utf8_is_unreadable() {
         (DT_RPATH, "DT_RPATH"),
         (DT_RUNPATH, "DT_RUNPATH"),
         (DT_NEEDED, "DT_NEEDED"),
-        (DT_AUDIT, "DT_AUDIT"),
-        (DT_DEPAUDIT, "DT_DEPAUDIT"),
-        (DT_FILTER, "DT_FILTER"),
-        (DT_AUXILIARY, "DT_AUXILIARY"),
     ];
-    for (tag, name) in tags {
+    for (tag, name) in tags.into_iter().chain(AUDIT_TAGS).chain(FILTEE_TAGS) {
         let image = not_utf8(elf(&[(tag, "/usr/lib/zzmarker")]), "zzmarker");
         let result = verify_bytes(&image);
         assert!(

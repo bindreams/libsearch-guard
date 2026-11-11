@@ -5,7 +5,8 @@
 //! The loader searches the executable's folder only when asked to, and `$ORIGIN` (or a relative path, resolved
 //! against the working directory) is how a binary asks. Every element must be an absolute path. A `DT_NEEDED`
 //! name with a `/` in it is opened as a path, so it too must be absolute; one without is looked up on the
-//! search paths. Audit libraries and filtees are named the same way, in `:`-separated lists. The program
+//! search paths. Audit libraries (`DT_AUDIT`, `DT_DEPAUDIT`) are named the same way, as elements of a
+//! `:`-separated list; a filtee (`DT_FILTER`, `DT_AUXILIARY`) is one name, with no list in it. The program
 //! interpreter (`PT_INTERP`) is always opened as a path.
 //!
 //! The dynamic entries are read through the `PT_DYNAMIC` segment and not through the section headers, which a
@@ -119,12 +120,18 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
             }
             continue;
         }
+        // An audit entry is a `:`-separated list of libraries; a filtee is one name (glibc's `dl-deps.c`).
         if matches!(tag, DT_AUDIT | DT_DEPAUDIT | DT_FILTER | DT_AUXILIARY) {
-            for element in value.split(':').filter(|element| !element.is_empty()) {
+            let elements: Vec<&str> = if matches!(tag, DT_AUDIT | DT_DEPAUDIT) {
+                value.split(':').filter(|element| !element.is_empty()).collect()
+            } else {
+                vec![value]
+            };
+            for element in elements {
                 if element.contains("$ORIGIN") || element.contains("${ORIGIN}") || is_relative_path(element) {
                     out.push(Violation {
                         kind: ViolationKind::ElfLoaderLibrary,
-                        detail: format!("{name} element {element:?} is `$ORIGIN`-based or a relative path"),
+                        detail: format!("{name} {element:?} is `$ORIGIN`-based or a relative path"),
                     });
                 }
             }
