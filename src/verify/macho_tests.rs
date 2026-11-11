@@ -256,7 +256,6 @@ fn a_32_bit_macho_is_checked() {
 #[test]
 fn a_path_that_is_not_utf8_is_unreadable() {
     let images = [
-        ("LC_RPATH", macho(&[rpath_command("/usr/zzmarker")])),
         (
             "LC_LOAD_DYLIB",
             macho(&[dylib_command(LC_LOAD_DYLIB, "/usr/lib/zzmarker.dylib")]),
@@ -273,4 +272,16 @@ fn a_path_that_is_not_utf8_is_unreadable() {
             "{name}: {result:?}"
         );
     }
+}
+
+/// Any `LC_RPATH` is a violation, whatever its text: one that is not UTF-8 is reported, with a lossy detail.
+#[test]
+fn an_rpath_that_is_not_utf8_is_still_reported() {
+    let result = verify_bytes(&not_utf8(macho(&[rpath_command("/usr/zzmarker")]), "zzmarker"));
+    let Err(VerifyError::Violations(found)) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, ViolationKind::MachoRpath);
+    assert!(found[0].detail.contains("/usr/\u{FFFD}zmarker"), "{}", found[0].detail);
 }

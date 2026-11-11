@@ -19,9 +19,10 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
         match command.variant().map_err(unreadable)? {
             LoadCommandVariant::Rpath(rpath) => {
                 let path = command.string(endian, rpath.path).map_err(unreadable)?;
+                // Any `LC_RPATH` is a violation whatever its text, so a path that is not UTF-8 is reported lossily.
                 out.push(Violation {
                     kind: ViolationKind::MachoRpath,
-                    detail: format!("LC_RPATH {:?}", utf8("LC_RPATH", path)?),
+                    detail: format!("LC_RPATH {:?}", String::from_utf8_lossy(path)),
                 });
             }
             // `LC_ID_DYLIB` (the `IdDylib` variant) names the library itself, not something it searches for.
