@@ -19,6 +19,9 @@ pub enum Probe {
     Hardened,
     /// The consumer does not.
     Plain,
+    /// The consumer calls `bins()` and links the C runtime statically (`-C target-feature=+crt-static`).
+    #[cfg(windows)]
+    HardenedCrtStatic,
     /// Built so that the loader searches the executable's folder, whatever the platform's way of asking is
     /// (an `$ORIGIN` RUNPATH on Linux, an `@executable_path` LC_RPATH on macOS). On Windows that is `Plain`.
     #[cfg_attr(
@@ -67,12 +70,24 @@ pub fn file_of<'a>(artifacts: &'a [Artifact], target: &str, kind: &str, harness:
 pub fn probe(kind: Probe) -> &'static Path {
     static HARDENED: OnceLock<PathBuf> = OnceLock::new();
     static PLAIN: OnceLock<PathBuf> = OnceLock::new();
+    #[cfg(windows)]
+    static CRT_STATIC: OnceLock<PathBuf> = OnceLock::new();
     static SEARCHES: OnceLock<PathBuf> = OnceLock::new();
     match kind {
         Probe::Hardened => {
             HARDENED.get_or_init(|| probe_bin("probe-hardened", &[("LIBSEARCH_GUARD_HARDEN_PROBE", "1")]))
         }
         Probe::Plain => PLAIN.get_or_init(|| probe_bin("probe-plain", &[])),
+        #[cfg(windows)]
+        Probe::HardenedCrtStatic => CRT_STATIC.get_or_init(|| {
+            probe_bin(
+                "probe-hardened-crt-static",
+                &[
+                    ("LIBSEARCH_GUARD_HARDEN_PROBE", "1"),
+                    ("RUSTFLAGS", "-C target-feature=+crt-static"),
+                ],
+            )
+        }),
         Probe::SearchesItsFolder if cfg!(windows) => probe(Probe::Plain),
         Probe::SearchesItsFolder => SEARCHES.get_or_init(|| {
             let origin = if cfg!(target_os = "macos") {

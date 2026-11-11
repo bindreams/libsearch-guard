@@ -28,7 +28,9 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///
 /// On `windows` + `msvc` targets this makes every `[[bin]]` of the package:
 ///
-/// - link the C startup code and the VC runtime statically, so it imports no `vcruntime140.dll`;
+/// - link the C startup code and the VC runtime statically, so it imports no `vcruntime140.dll`. The Universal
+///   CRT stays dynamic, unless the build already links the whole CRT statically (`+crt-static`): then these
+///   arguments are skipped and it stays static;
 /// - set `/DEPENDENTLOADFLAG:0x800`, so its imports are searched in System32 only;
 /// - call `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` before `main`, so a `LoadLibrary` call
 ///   without flags, including one made inside a system DLL, searches System32 only. If that call fails, the
@@ -49,11 +51,15 @@ pub fn bins() {
     }
     let object = compile_initializer(&var("TARGET"), Path::new(&var("OUT_DIR")), Path::new(&var("RUSTC")));
     println!("cargo:rustc-link-arg-bins={}", object.display());
-    for lib in REPLACED_RUNTIME_LIBS {
-        println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:{lib}");
-    }
-    for lib in WANTED_RUNTIME_LIBS {
-        println!("cargo:rustc-link-arg-bins=/DEFAULTLIB:{lib}");
+    // `+crt-static` already links the whole CRT statically, the Universal CRT included. The arguments below
+    // would turn that one back into a dynamic import.
+    if !crt_static() {
+        for lib in REPLACED_RUNTIME_LIBS {
+            println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:{lib}");
+        }
+        for lib in WANTED_RUNTIME_LIBS {
+            println!("cargo:rustc-link-arg-bins=/DEFAULTLIB:{lib}");
+        }
     }
     println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
 }
@@ -97,6 +103,14 @@ fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
         "libsearch-guard: compiling the initializer for {target} failed ({status})"
     );
     object
+}
+
+/// Whether the build links the C runtime statically (`-C target-feature=+crt-static`).
+fn crt_static() -> bool {
+    env::var("CARGO_CFG_TARGET_FEATURE")
+        .unwrap_or_default()
+        .split(',')
+        .any(|feature| feature == "crt-static")
 }
 
 fn var(name: &str) -> String {

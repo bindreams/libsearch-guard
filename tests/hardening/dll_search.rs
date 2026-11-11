@@ -42,6 +42,15 @@ fn a_hardened_probe_refuses_a_dll_planted_in_its_folder() {
 }
 
 #[test]
+fn a_hardened_probe_with_a_static_crt_refuses_a_dll_planted_in_its_folder() {
+    assert!(!loads(
+        probe(Probe::HardenedCrtStatic),
+        planted(Runtime::Static),
+        "flagless"
+    ));
+}
+
+#[test]
 fn a_hardened_probe_still_loads_a_static_runtime_sidecar_from_its_folder_explicitly() {
     assert!(loads(probe(Probe::Hardened), planted(Runtime::Static), "app"));
 }

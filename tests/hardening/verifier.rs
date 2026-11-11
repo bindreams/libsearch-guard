@@ -68,3 +68,31 @@ fn only_the_bins_and_their_own_harnesses_are_hardened() {
         );
     }
 }
+
+/// A consumer that links the C runtime statically (`+crt-static`) keeps the Universal CRT static too: the
+/// bin imports only the system DLLs it needs, none of the `api-ms-win-crt-*` forwarders.
+#[cfg(windows)]
+#[test]
+fn a_hardened_probe_with_a_static_crt_imports_no_universal_crt_dll() {
+    use object::read::File;
+    use object::Object;
+
+    let path = probe(Probe::HardenedCrtStatic);
+    verify(path).unwrap();
+    let bytes = std::fs::read(path).unwrap();
+    let file = File::parse(&*bytes).unwrap();
+    let imports = file.imports().unwrap();
+    let mut libraries: Vec<String> = imports
+        .map(|i| String::from_utf8_lossy(i.unwrap().library()).to_ascii_lowercase())
+        .collect();
+    libraries.sort();
+    libraries.dedup();
+    let crt: Vec<_> = libraries
+        .iter()
+        .filter(|l| l.starts_with("api-ms-win-crt-") || l.starts_with("ucrtbase"))
+        .collect();
+    assert!(
+        crt.is_empty(),
+        "imports the Universal CRT: {crt:?} (all imports: {libraries:?})"
+    );
+}
