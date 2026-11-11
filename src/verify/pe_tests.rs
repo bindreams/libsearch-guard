@@ -21,14 +21,36 @@ fn hardened_pe_passes() {
     assert_eq!(kinds(&image), vec![]);
 }
 
+/// `LOAD_LIBRARY_SEARCH_USER_DIRS` (0x400) adds the directories a process registered with `AddDllDirectory`;
+/// at load time there are none, so an import is still searched for in System32 only (measured).
 #[test]
-fn flags_that_include_system32_pass() {
+fn flags_that_add_the_user_dirs_to_system32_pass() {
     let image = pe(&Pe {
         imports: &["KERNEL32.dll"],
         delay_imports: &[],
-        load_config: Some((0x800 | 0x200, FULL)),
+        load_config: Some((0x800 | 0x400, FULL)),
     });
     assert_eq!(kinds(&image), vec![]);
+}
+
+/// 0x100 is `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`, 0x200 is `LOAD_LIBRARY_SEARCH_APPLICATION_DIR` and 0x1000 is
+/// `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`, which includes the application directory. Each one, next to 0x800, makes
+/// the loader search the executable's folder for its imports (measured).
+#[test]
+fn flags_that_search_the_executables_folder_are_reported_even_with_system32() {
+    for flags in [
+        0x800 | 0x100,
+        0x800 | 0x200,
+        0x800 | 0x1000,
+        0x800 | 0x100 | 0x200 | 0x1000,
+    ] {
+        let image = pe(&Pe {
+            imports: &["KERNEL32.dll"],
+            delay_imports: &[],
+            load_config: Some((flags, FULL)),
+        });
+        assert_eq!(kinds(&image), vec![ViolationKind::PeDependentLoadFlags], "{flags:#x}");
+    }
 }
 
 #[test]

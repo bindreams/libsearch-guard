@@ -1,5 +1,6 @@
-//! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32`, and no Visual C++
-//! redistributable DLL is imported, in the import table or the delay-load import table.
+//! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32` and none of the flags
+//! that make the loader search the executable's folder, and no Visual C++ redistributable DLL is imported, in the
+//! import table or the delay-load import table.
 
 use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG};
 use object::read::pe::{ImageNtHeaders, PeFile};
@@ -8,6 +9,11 @@ use object::LittleEndian as LE;
 use super::{unreadable, Violation, ViolationKind};
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
+/// `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` (0x100), `LOAD_LIBRARY_SEARCH_APPLICATION_DIR` (0x200) and
+/// `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` (0x1000, which includes the application directory): each makes the loader
+/// search the executable's folder for its imports. `LOAD_LIBRARY_SEARCH_USER_DIRS` (0x400) is allowed: it adds
+/// only the directories registered with `AddDllDirectory`, and none is at load time.
+const SEARCHES_EXECUTABLES_FOLDER: u16 = 0x0100 | 0x0200 | 0x1000;
 
 /// Whether the DLL `name` (lower case) is a Visual C++ redistributable: not part of Windows, so an import of it
 /// is searched for in the executable's folder, and is not found in System32 where the redistributable is not
@@ -134,6 +140,15 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         out.push(Violation {
             kind: ViolationKind::PeDependentLoadFlags,
             detail: format!("DependentLoadFlags is {flags:#x}, which lacks LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800)"),
+        });
+    }
+    if flags & SEARCHES_EXECUTABLES_FOLDER != 0 {
+        out.push(Violation {
+            kind: ViolationKind::PeDependentLoadFlags,
+            detail: format!(
+                "DependentLoadFlags is {flags:#x}, which includes {:#x}: the loader then searches the executable's folder for its imports",
+                flags & SEARCHES_EXECUTABLES_FOLDER
+            ),
         });
     }
 
