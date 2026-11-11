@@ -1,6 +1,6 @@
-use super::{compile_initializer, hardens, link_arg_path, unicode, var_os};
+use super::{compile_initializer, hardens, plan, unicode, var_os};
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn msvc_windows_is_hardened() {
@@ -33,7 +33,8 @@ fn cygwin_is_refused_with_the_reason() {
 )]
 fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
     let dir = tempfile::tempdir().unwrap();
-    compile_initializer("no-such-target", dir.path(), Path::new("rustc"));
+    let initializer = plan("windows", "msvc", dir.path()).unwrap().unwrap();
+    compile_initializer("no-such-target", Path::new("rustc"), &initializer);
 }
 
 #[test]
@@ -71,14 +72,36 @@ fn a_variable_that_is_not_unicode_is_not_called_unset() {
     unicode("TARGET", not_unicode());
 }
 
+/// rustc takes only Unicode arguments and a link argument is a `cargo:` line, so a non-Unicode `OUT_DIR`, where the
+/// source and the object go, is refused by the decision, before rustc runs.
 #[test]
-#[should_panic(expected = "is not valid Unicode, and a link argument must be")]
-fn a_link_argument_path_that_is_not_unicode_is_refused() {
-    let dir = std::path::PathBuf::from(not_unicode());
-    link_arg_path(&dir.join("initializer.obj"));
+fn a_non_unicode_out_dir_is_refused_before_anything_is_compiled() {
+    let out_dir = PathBuf::from(not_unicode());
+    let message = plan("windows", "msvc", &out_dir).unwrap_err();
+    assert!(
+        message.contains("is not valid Unicode") && message.contains("use a target directory with a Unicode path"),
+        "{message}"
+    );
 }
 
 #[test]
-fn a_unicode_link_argument_path_is_passed_through() {
-    assert_eq!(link_arg_path(Path::new("out/initializer.obj")), "out/initializer.obj");
+fn a_non_unicode_out_dir_does_not_matter_where_nothing_is_compiled() {
+    let out_dir = PathBuf::from(not_unicode());
+    for (os, env) in [("linux", "gnu"), ("macos", ""), ("freebsd", "")] {
+        assert!(matches!(plan(os, env, &out_dir), Ok(None)), "{os}-{env}");
+    }
+}
+
+#[test]
+fn a_target_that_cannot_be_hardened_is_refused_whatever_out_dir_is() {
+    let message = plan("windows", "gnu", Path::new("out")).unwrap_err();
+    assert!(message.contains("only windows-msvc"), "{message}");
+}
+
+#[test]
+fn the_source_and_the_object_go_in_out_dir() {
+    let initializer = plan("windows", "msvc", Path::new("out")).unwrap().unwrap();
+    assert_eq!(Path::new(&initializer.source).parent(), Some(Path::new("out")));
+    assert_eq!(Path::new(&initializer.object).parent(), Some(Path::new("out")));
+    assert_ne!(initializer.source, initializer.object);
 }

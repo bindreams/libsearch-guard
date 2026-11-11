@@ -1,6 +1,6 @@
 use std::env;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 #[cfg(test)]
@@ -61,20 +61,23 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// - If it is not called from a build script.
 /// - On a Windows target that is not `*-windows-msvc`, or on Cygwin (whose executables are PE files loaded by
 ///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened.
+/// - On a target it hardens, if `OUT_DIR` is not valid Unicode: rustc and the linker take only Unicode paths. It
+///   is refused before anything is compiled.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
 ///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
-    match hardens(&var("CARGO_CFG_TARGET_OS"), &var("CARGO_CFG_TARGET_ENV")) {
-        Ok(true) => {}
-        Ok(false) => return,
+    let out_dir = var_os("OUT_DIR");
+    let initializer = match plan(
+        &var("CARGO_CFG_TARGET_OS"),
+        &var("CARGO_CFG_TARGET_ENV"),
+        Path::new(&out_dir),
+    ) {
+        Ok(Some(initializer)) => initializer,
+        Ok(None) => return,
         Err(message) => panic!("libsearch-guard: {message}"),
-    }
-    let object = compile_initializer(
-        &var("TARGET"),
-        Path::new(&var_os("OUT_DIR")),
-        Path::new(&var_os("RUSTC")),
-    );
-    println!("cargo:rustc-link-arg-bins={}", link_arg_path(&object));
+    };
+    compile_initializer(&var("TARGET"), Path::new(&var_os("RUSTC")), &initializer);
+    println!("cargo:rustc-link-arg-bins={}", initializer.object);
     // +crt-static: these arguments would make the Universal CRT dynamic again.
     if !crt_static() {
         for lib in REPLACED_RUNTIME_LIBS {
@@ -103,16 +106,44 @@ fn hardens(os: &str, env: &str) -> Result<bool, String> {
     }
 }
 
+/// Where `bins()` compiles the initializer to. Both paths are text: rustc takes only Unicode arguments, and the
+/// object is also the text of a `cargo:rustc-link-arg-bins` line.
+#[derive(Debug)]
+struct Initializer {
+    source: String,
+    object: String,
+}
+
+/// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
+/// `out_dir`: nothing, or compile the initializer. An error is a target it cannot harden, or an `out_dir` that
+/// is not Unicode; it is reached before anything is compiled.
+fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Option<Initializer>, String> {
+    if !hardens(os, env)? {
+        return Ok(None);
+    }
+    let unicode_path = |name: &str| {
+        let path = out_dir.join(name);
+        path.to_str().map(str::to_owned).ok_or_else(|| {
+            format!(
+                "{} is not valid Unicode, and the paths handed to rustc and the linker must be; use a target directory with a Unicode path",
+                path.display()
+            )
+        })
+    };
+    Ok(Some(Initializer {
+        source: unicode_path("libsearch_guard_pre_main.rs")?,
+        object: unicode_path("libsearch_guard_pre_main.obj")?,
+    }))
+}
+
 /// Compiles the initializer to an object file with the build's own `rustc`.
 ///
 /// The object is handed to the linker directly, so it is linked into whichever binary gets the argument and
 /// into nothing else. The consumer's `RUSTFLAGS` are not passed on; the object needs none of them
 /// (`-C control-flow-guard` included).
-fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
-    let source = out_dir.join("libsearch_guard_pre_main.rs");
-    let object = out_dir.join("libsearch_guard_pre_main.obj");
-    std::fs::write(&source, INITIALIZER)
-        .unwrap_or_else(|e| panic!("libsearch-guard: cannot write {}: {e}", source.display()));
+fn compile_initializer(target: &str, rustc: &Path, initializer: &Initializer) {
+    std::fs::write(&initializer.source, INITIALIZER)
+        .unwrap_or_else(|e| panic!("libsearch-guard: cannot write {}: {e}", initializer.source));
     let status = Command::new(rustc)
         .args([
             "--edition",
@@ -134,15 +165,14 @@ fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
             "debuginfo=0",
         ])
         .arg("-o")
-        .arg(&object)
-        .arg(&source)
+        .arg(&initializer.object)
+        .arg(&initializer.source)
         .status()
         .unwrap_or_else(|e| panic!("libsearch-guard: cannot run {}: {e}", rustc.display()));
     assert!(
         status.success(),
         "libsearch-guard: compiling libsearch-guard's initializer for {target} failed (rustc's error is above). A target with no prebuilt `core` (tier 3, -Zbuild-std) is not supported."
     );
-    object
 }
 
 fn crt_static() -> bool {
@@ -168,14 +198,4 @@ fn unicode(name: &str, value: OsString) -> String {
 
 fn var(name: &str) -> String {
     unicode(name, var_os(name))
-}
-
-/// `path` as the text of a `cargo:rustc-link-arg` line, which cannot carry anything but Unicode.
-fn link_arg_path(path: &Path) -> &str {
-    path.to_str().unwrap_or_else(|| {
-        panic!(
-            "libsearch-guard: {} is not valid Unicode, and a link argument must be; use a target directory with a Unicode path",
-            path.display()
-        )
-    })
 }
