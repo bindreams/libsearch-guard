@@ -176,18 +176,20 @@ pub fn hardened_probe_bench_harness() -> &'static Path {
 
 /// Environment variables, by name, that change how cargo builds and that a fixture build must not inherit.
 /// `RUSTFLAGS` is not among them: every build sets it (see [`cargo`]).
-const BUILD_OVERRIDES: [&str; 4] = [
+const BUILD_OVERRIDES: [&str; 6] = [
     "CARGO_ENCODED_RUSTFLAGS",
-    "CARGO_BUILD_RUSTFLAGS",
     "CARGO_BUILD_TARGET",
     "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 ];
 
-/// Whether `name` is `CARGO_TARGET_<triple>_RUSTFLAGS` or `CARGO_TARGET_<triple>_LINKER`, whatever the case: the
-/// triple is in the name, so these cannot be listed.
-fn is_target_override(name: &str) -> bool {
+/// Whether `name` is `CARGO_TARGET_<triple>_LINKER`, whatever the case: the triple is in the name, so these
+/// cannot be listed.
+fn is_linker_override(name: &str) -> bool {
     let name = name.to_ascii_uppercase();
-    name.starts_with("CARGO_TARGET_") && (name.ends_with("_RUSTFLAGS") || name.ends_with("_LINKER"))
+    name.starts_with("CARGO_TARGET_") && name.ends_with("_LINKER")
 }
 
 /// Runs `cargo <subcommand>` on a fixture package in its own target directory and returns the package's
@@ -195,11 +197,12 @@ fn is_target_override(name: &str) -> bool {
 ///
 /// The build does not inherit the outer environment's rustc flags, linker, wrapper or target:
 /// - `RUSTFLAGS` is always set, empty unless `envs` sets it. Cargo uses one source of rustc flags, and
-///   `RUSTFLAGS` takes precedence over the `build.rustflags` and `target.<triple>.rustflags` of any cargo
-///   config, so the build gets these flags and no others;
-/// - [`BUILD_OVERRIDES`] and the `CARGO_TARGET_*` flags and linker variables are removed:
+///   `RUSTFLAGS` outranks everything below it: `CARGO_BUILD_RUSTFLAGS`, `CARGO_TARGET_<triple>_RUSTFLAGS` and the
+///   `build.rustflags` and `target.<triple>.rustflags` of any cargo config. The build gets these flags and no
+///   others;
+/// - [`BUILD_OVERRIDES`] and the `CARGO_TARGET_<triple>_LINKER` variables are removed:
 ///   `CARGO_ENCODED_RUSTFLAGS` would outrank `RUSTFLAGS`, and the others pick the target, the linker or a
-///   compiler wrapper.
+///   compiler wrapper (`RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER`, and their `CARGO_BUILD_` forms).
 ///
 /// A cargo config's own `build.target` and linker are not overridden.
 fn cargo(subcommand: &[&str], package: &str, target_dir_name: &str, envs: &[(&str, &str)]) -> Vec<Artifact> {
@@ -216,7 +219,7 @@ fn cargo(subcommand: &[&str], package: &str, target_dir_name: &str, envs: &[(&st
         command.env_remove(name);
     }
     for (name, _) in std::env::vars_os() {
-        if name.to_str().is_some_and(is_target_override) {
+        if name.to_str().is_some_and(is_linker_override) {
             command.env_remove(name);
         }
     }
