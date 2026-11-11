@@ -55,11 +55,11 @@ fn the_binary_is_hardened() {
 
 `verify(path)` reads the file and reports every violation it finds, not only the first:
 
-| Format | A violation is                                                                                                  |
-| ------ | --------------------------------------------------------------------------------------------------------------- |
-| PE     | `DependentLoadFlags` without 0x800; an import of a Visual C++ redistributable DLL: `vcruntime*`, `msvcp1*`, `msvcp2*`, `concrt*`, `vcomp*`, `vccorlib*`, `vcamp*`, `mfc*` (not `msvcp_win`, which is part of Windows)                                       |
-| ELF    | an RPATH or RUNPATH element that is `$ORIGIN`-based or relative (every element must be absolute); a `DT_NEEDED` that contains a `/` but does not start with one |
-| Mach-O | any `LC_RPATH`; a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based or relative; an `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH` list |
+| Format | A violation is                                                                                                                                                                                                        |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PE     | `DependentLoadFlags` without 0x800; an import of a Visual C++ redistributable DLL: `vcruntime*`, `msvcp1*`, `msvcp2*`, `concrt*`, `vcomp*`, `vccorlib*`, `vcamp*`, `mfc*` (not `msvcp_win`, which is part of Windows) |
+| ELF    | an RPATH or RUNPATH element that is `$ORIGIN`-based or relative (every element must be absolute); a `DT_NEEDED` that contains a `/` but does not start with one                                                       |
+| Mach-O | any `LC_RPATH`; a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based or relative; an `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH` list                          |
 
 ELF files are read through their `PT_DYNAMIC` segment, as the loader reads them, so a binary without section headers is checked too. A file it cannot read as one of these formats is an error, not a pass. Universal Mach-O binaries are checked slice by slice.
 
