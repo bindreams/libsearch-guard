@@ -39,7 +39,8 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// - call `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` before `main`, from the `.CRT$XIAB` slot,
 ///   so a `LoadLibrary` call without flags, including one made inside a system DLL, searches System32 only.
 ///   The CRT runs that slot before every `.CRT$XC*` initializer (C++ constructors, `ctor`-style crates). If the
-///   call fails, the process writes the error to stderr and terminates before `main`.
+///   call fails, the process writes the error to stderr (to the debugger where there is no usable stderr) and
+///   terminates before `main`; a fast-fail trap follows the termination, so it never reaches `main` unhardened.
 ///
 /// What runs before that call: TLS callbacks (`.CRT$XL*`), the CRT's own start-up code and its `.CRT$XIAA`
 /// initializers, and the loader's resolution of the import table, which `/DEPENDENTLOADFLAG` covers.

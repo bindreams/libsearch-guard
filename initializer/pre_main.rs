@@ -9,17 +9,53 @@ extern "system" {
     fn GetLastError() -> u32;
     fn GetStdHandle(std_handle: u32) -> *mut c_void;
     fn WriteFile(file: *mut c_void, buffer: *const u8, len: u32, written: *mut u32, overlapped: *mut c_void) -> i32;
+    fn OutputDebugStringA(message: *const u8);
     fn GetCurrentProcess() -> *mut c_void;
     fn TerminateProcess(process: *mut c_void, exit_code: u32) -> i32;
 }
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+const INVALID_HANDLE_VALUE: isize = -1;
 const STATUS_FAIL_FAST_EXCEPTION: u32 = 0xC000_0409;
+const FAST_FAIL_FATAL_APP_EXIT: u32 = 7;
 
-unsafe fn write_stderr(bytes: &[u8]) {
+/// Writes the NUL-terminated `message` to stderr, or to the debugger where stderr is unusable (closed,
+/// redirected nowhere, or a GUI-subsystem process). Best effort: if both fail the process still terminates,
+/// and there is nowhere left to say why.
+unsafe fn report(message: &[u8]) {
+    let stderr = GetStdHandle(STD_ERROR_HANDLE);
     let mut written = 0u32;
-    WriteFile(GetStdHandle(STD_ERROR_HANDLE), bytes.as_ptr(), bytes.len() as u32, &mut written, core::ptr::null_mut());
+    let wrote = !stderr.is_null()
+        && stderr as isize != INVALID_HANDLE_VALUE
+        && WriteFile(
+            stderr,
+            message.as_ptr(),
+            (message.len() - 1) as u32,
+            &mut written,
+            core::ptr::null_mut(),
+        ) != 0;
+    if !wrote {
+        OutputDebugStringA(message.as_ptr());
+    }
+}
+
+/// Ends the process without returning, whatever `TerminateProcess` did: a fast-fail trap, which the OS handles
+/// itself and no exception handler can intercept, or an endless loop where this architecture has no trap here.
+unsafe fn fail_fast() -> ! {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        core::arch::asm!("int 0x29", in("ecx") FAST_FAIL_FATAL_APP_EXIT, options(noreturn, nostack));
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        core::arch::asm!("brk #0xF003", in("x0") FAST_FAIL_FATAL_APP_EXIT, options(noreturn, nostack));
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = FAST_FAIL_FATAL_APP_EXIT;
+        loop {}
+    }
 }
 
 unsafe extern "C" fn initialize() -> i32 {
@@ -27,17 +63,18 @@ unsafe extern "C" fn initialize() -> i32 {
         return 0;
     }
     let code = GetLastError();
-    let mut hex = *b"00000000\r\n";
+    let mut message = *b"libsearch-guard: SetDefaultDllDirectories failed, error 0x00000000\r\n\0";
+    let digits_at = message.len() - 11;
     let mut i = 0;
     while i < 8 {
         let digit = ((code >> (28 - 4 * i)) & 0xF) as u8;
-        hex[i] = if digit < 10 { b'0' + digit } else { b'a' + digit - 10 };
+        message[digits_at + i] = if digit < 10 { b'0' + digit } else { b'a' + digit - 10 };
         i += 1;
     }
-    write_stderr(b"libsearch-guard: SetDefaultDllDirectories failed, error 0x");
-    write_stderr(&hex);
+    report(&message);
     TerminateProcess(GetCurrentProcess(), STATUS_FAIL_FAST_EXCEPTION);
-    1
+    // `TerminateProcess` does not return on success. If it failed, `main` would run unhardened.
+    fail_fast()
 }
 
 // `.CRT$XIAB` is a C initializer slot (`int (*)(void)`): the CRT runs the `.CRT$XI*` entries, in section-name
