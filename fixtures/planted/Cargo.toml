@@ -1,0 +1,9 @@
+[package]
+name = "planted"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Test fixture: a DLL a test plants beside the probe. The tests build it with the dynamic and with the static C runtime."
+
+[lib]
+crate-type = ["cdylib"]

@@ -1,0 +1,25 @@
+[workspace]
+members = [".", "fixtures/probe", "fixtures/planted"]
+
+[package]
+name = "libsearch-guard"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+authors = ["Anna Zhukova"]
+description = "Restricts where a Windows executable's DLLs are searched for, from a build script, and checks Windows, Linux and macOS binaries for relative library search paths"
+license = "Apache-2.0"
+repository = "https://github.com/bindreams/libsearch-guard"
+readme = "README.md"
+keywords = ["windows", "dll", "hardening", "build-script", "security"]
+categories = ["development-tools::build-utils", "os::windows-apis"]
+# `fixtures/` are separate packages the tests build; `.github/` is repository tooling.
+exclude = [".github/", "fixtures/", "prek.toml", "CONTRIBUTING.md"]
+
+[dependencies]
+# Reads PE, ELF and Mach-O headers for `verify`. No compression, no archive or COFF-object parsing.
+object = { version = "0.41", default-features = false, features = ["read_core", "std", "elf", "macho", "pe"] }
+
+[dev-dependencies]
+# Per-test scratch directories removed on drop, panic or not.
+tempfile = "3"
