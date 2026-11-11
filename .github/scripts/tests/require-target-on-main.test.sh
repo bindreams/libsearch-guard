@@ -29,7 +29,7 @@ STUB
 chmod +x "$work/bin/gh"
 
 fail=0
-floor=0060c68d928654ef029ed0680ec5d062094805ec
+floor=ec111bf90145077b1447e1f3d2dd98163ef1a63e
 target=0123456789abcdef0123456789abcdef01234567
 ok_body='{"status":"ahead"}'
 same='{"status":"identical"}'

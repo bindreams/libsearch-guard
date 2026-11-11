@@ -8,10 +8,9 @@
 # The trust this gives, and what it rests on, is stated once, in the header of
 # publish-release.yaml.
 #
-# FLOOR is the first commit after which every commit on `main` entered through
-# the default-branch ruleset (linear history, squash-only merges, required CI).
-# Earlier history holds direct pushes and a merge commit. Raise it only to a
-# later commit on `main`, never lower it.
+# FLOOR is the last commit of the initial import, which was pushed directly before
+# the default-branch ruleset (linear history, squash-only merges, required CI)
+# existed. Raise it only to a later commit on `main`, never lower it.
 #
 # Compare status is relative to the head, so `ahead` means the head contains
 # the base. Only `ahead` and `identical` pass. The head of the main comparison
@@ -23,7 +22,7 @@ set -euo pipefail
 
 : "${GH_REPO:?}" "${TARGET:?}"
 
-FLOOR=0060c68d928654ef029ed0680ec5d062094805ec
+FLOOR=ec111bf90145077b1447e1f3d2dd98163ef1a63e
 
 if ! [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]]; then
 	echo "::error::Target '$TARGET' is not a 40-char commit SHA, so it cannot be checked against main."
