@@ -26,7 +26,7 @@ fn cygwin_is_refused_with_the_reason() {
     }
 }
 
-/// Whatever made rustc fail, the message must be true, so it states the one known limit and not a cause.
+/// The failure message names the known limit, not a guessed cause.
 #[test]
 #[should_panic(
     expected = "compiling libsearch-guard's initializer for no-such-target failed (rustc's error is above). A target with no prebuilt `core` (tier 3, -Zbuild-std) is not supported."

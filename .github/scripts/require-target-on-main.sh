@@ -15,9 +15,7 @@
 # Compare status is relative to the head, so `ahead` means the head contains
 # the base. Only `ahead` and `identical` pass. The head of the main comparison
 # is the full ref, since a bare `main` may resolve to a tag of that name, which
-# any writer can push. A failed `gh` refuses whatever it printed, and `gh`
-# itself logs the HTTP status, which is how to tell an outage (5xx, 403/429)
-# from a target that is not a comparable commit here (404/422).
+# any writer can push. A failed `gh` refuses whatever it printed.
 set -euo pipefail
 
 : "${GH_REPO:?}" "${TARGET:?}"

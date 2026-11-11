@@ -5,18 +5,13 @@
 # versions can package one tree into different bytes, and stage 2 holds its
 # re-derived archives to the build job's hashes.
 #
-# This lives in a script, like normalize-version.sh, because both stages must
-# accept exactly the same spellings: the value ends up in a toolchain
-# installer's command line. The grammar is also written in
-# .github/actions/install-toolchain/action.yaml and .github/renovate.json;
-# change all three together.
+# Grammar is also written in .github/actions/install-toolchain/action.yaml and .github/renovate.json; change all
+# three together.
 #
 # The file is read once, bounded, into a temporary copy, so the NUL check and the
 # grammar check see the same bytes. Errors quote the file's content with
 # `printf %q`, so it cannot forge workflow commands.
 set -euo pipefail
-# Not known to matter for the grammar below (no locale was found where it
-# changes an outcome); kept as defence and untested.
 export LC_ALL=C
 
 if [ "$#" -ne 1 ]; then

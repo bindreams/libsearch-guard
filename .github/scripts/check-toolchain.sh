@@ -5,8 +5,7 @@
 # silently leave the runner's preinstalled toolchain in place. For an exact
 # X.Y.Z this also exports RUSTUP_TOOLCHAIN, here and for every later step
 # (through $GITHUB_ENV): it outranks any `rust-toolchain(.toml)` in whatever
-# directory cargo runs from, `path =` toolchains included, so the check holds
-# wherever a later step runs cargo.
+# directory cargo runs from, `path =` toolchains included.
 #
 # Validation of the argument's shape is the caller's job
 # (.github/actions/install-toolchain), before anything is installed.

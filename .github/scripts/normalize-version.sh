@@ -4,21 +4,8 @@
 # Accepts three dot-separated non-negative integers with no leading zeros, no
 # leading `v`, and no pre-release or build suffix (e.g. `1.2.3`).
 #
-# A leading `v` is rejected rather than stripped: draft-release.yaml and
-# publish-release.yaml both key their concurrency group on the raw input, so
-# if `1.2.3` and `v1.2.3` normalized to the same version they would land in
-# *different* concurrency groups while naming the same release — two runs of
-# the same publish, in parallel, on an operation that cannot be undone. One
-# accepted spelling keeps key and meaning in step.
-#
-# Leading zeros are rejected too: `01.2.3` is not valid semver, so
-# cargo rejects it in a manifest, so an input spelled that way could never
-# match the manifest version the release is checked against.
-#
-# This lives in a script, alongside publishable-members.sh and crate-state.sh,
-# because both release workflows validate the same operator input the same
-# way: a fix to one copy of this regex and not the other would silently
-# reopen the double-publish race described above.
+# `v` is rejected, not stripped: 1.2.3 and v1.2.3 would get different concurrency groups yet name one release.
+# Leading zeros are invalid semver, so cargo would never match them. Shared by both release workflows.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then

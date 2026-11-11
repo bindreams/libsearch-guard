@@ -7,12 +7,11 @@ use std::process::Command;
 #[path = "bins_tests.rs"]
 mod tests;
 
-/// Source of the pre-`main` initializer. Compiled by [`bins`] into the consumer's `OUT_DIR`.
+/// Source of the pre-`main` initializer.
 const INITIALIZER: &str = include_str!("../initializer/pre_main.rs");
 
-/// The static-vcruntime link arguments, copied from the `static_vcruntime` crate (3.0.0), which can only emit
-/// them for every target, not for bins alone. They link the C startup code and the VC runtime statically
-/// and keep the Universal CRT dynamic, so the binary imports no `vcruntime140.dll`.
+/// The static-vcruntime link arguments: link the C startup code and the VC runtime statically, keep the
+/// Universal CRT dynamic, so the binary imports no `vcruntime140.dll`.
 const REPLACED_RUNTIME_LIBS: [&str; 8] = [
     "libvcruntimed.lib",
     "vcruntime.lib",
@@ -53,7 +52,7 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///
 /// `+crt-static` is detected through the target features cargo reports to the build script: `RUSTFLAGS` and
 /// the target config set them, but `cargo rustc -- -C target-feature=+crt-static` reaches the final crate
-/// only and is not seen. The static-CRT arguments are then emitted and make the Universal CRT dynamic.
+/// only and is not seen.
 ///
 /// Call it only from a package that has a `[[bin]]`: cargo rejects the link arguments otherwise.
 ///
@@ -61,8 +60,7 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///
 /// - If it is not called from a build script.
 /// - On a Windows target that is not `*-windows-msvc`, or on Cygwin (whose executables are PE files loaded by
-///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened, and a bin that
-///   silently is not would be worse than a failed build.
+///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
 ///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
@@ -77,8 +75,7 @@ pub fn bins() {
         Path::new(&var_os("RUSTC")),
     );
     println!("cargo:rustc-link-arg-bins={}", link_arg_path(&object));
-    // `+crt-static` already links the whole CRT statically, the Universal CRT included. The arguments below
-    // would turn that one back into a dynamic import.
+    // +crt-static: these arguments would make the Universal CRT dynamic again.
     if !crt_static() {
         for lib in REPLACED_RUNTIME_LIBS {
             println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:{lib}");
@@ -109,9 +106,8 @@ fn hardens(os: &str, env: &str) -> Result<bool, String> {
 /// Compiles the initializer to an object file with the build's own `rustc`.
 ///
 /// The object is handed to the linker directly, so it is linked into whichever binary gets the argument and
-/// into nothing else. The consumer's `RUSTFLAGS` are not passed on: the object needs none of them. That was
-/// measured with `-C control-flow-guard`, the one flag that could matter, since the CRT calls the initializer
-/// through a function pointer: it runs the same with and without the flag, so nothing needs passing on.
+/// into nothing else. The consumer's `RUSTFLAGS` are not passed on; the object needs none of them
+/// (`-C control-flow-guard` included).
 fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
     let source = out_dir.join("libsearch_guard_pre_main.rs");
     let object = out_dir.join("libsearch_guard_pre_main.obj");
@@ -149,7 +145,6 @@ fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
     object
 }
 
-/// Whether the build links the C runtime statically (`-C target-feature=+crt-static`).
 fn crt_static() -> bool {
     env::var_os("CARGO_CFG_TARGET_FEATURE").is_some_and(|features| {
         features

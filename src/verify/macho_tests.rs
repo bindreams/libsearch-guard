@@ -113,8 +113,7 @@ fn absolute_dyld_search_paths_and_other_dyld_variables_pass() {
     }
 }
 
-/// dyld joins an empty element to the leaf name as `/leaf`, a path in the root directory: neither relative to
-/// the binary nor to the working directory.
+/// An empty `DYLD_*_PATH` element is not reported (see macho.rs).
 #[test]
 fn an_empty_dyld_search_path_or_element_is_not_reported() {
     for value in [
