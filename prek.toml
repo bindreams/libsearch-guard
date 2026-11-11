@@ -1,0 +1,107 @@
+default_install_hook_types = ["pre-commit", "commit-msg"]
+
+# Local hooks ==========================================================================================================
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+entry = "cargo fmt --all"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy"
+# --workspace so the test fixtures are linted too.
+entry = "cargo clippy --workspace --all-targets -- -D warnings"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "shellcheck-on-path"
+name = "shellcheck is on PATH for actionlint"
+# actionlint (below) shells out to `shellcheck` for `run:` blocks but
+# silently disables that check if the binary isn't on PATH. Fail loudly
+# instead, the same way in both places prek runs: a local pre-commit run and
+# CI's `prek run --all-files`.
+entry = "shellcheck --version"
+language = "system"
+files = '^\.github/workflows/'
+pass_filenames = false
+
+# External hooks =======================================================================================================
+
+# Every external hook is pinned as `rev = "<40-hex commit SHA>" # frozen: <tag>`, with `repo` on the line
+# before `rev` (comment lines may sit between). `prek autoupdate --freeze` writes this form. Renovate's
+# prek manager (.github/renovate.json) tracks only this form, so a rev in any other shape goes untracked.
+
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "3e8a8703264a2f4a69428a0aa4dcb512790b2c8c" # frozen: v6.0.0
+hooks = [
+  { id = "check-executables-have-shebangs" },
+  { id = "check-shebang-scripts-are-executable", exclude_types = ["rust"] },
+  { id = "mixed-line-ending", args = ["--fix=lf"] },
+]
+
+[[repos]]
+# Using prettier instead of mdformat because prettier preserves the
+# `  ` (two-space) trailing-whitespace line break style instead of
+# rewriting it to `\`.
+repo = "https://github.com/rbubley/mirrors-prettier"
+rev = "331f33fa4dfbcbca7c3da3620c137fde0faab273" # frozen: v3.9.10
+hooks = [
+  { id = "prettier", types = ["markdown"] },
+]
+
+[[repos]]
+# The release pipeline gates the only irreversible operation in the repo and
+# nothing checked its shell until now. Two failure modes it has produced are
+# *optional* checks in shellcheck rather than defaults, so they are enabled in
+# `.shellcheckrc`: a return masked by `< <(...)` (SC2312), which this repo's
+# own draft-release workflow tripped over, and a `case` with no default arm
+# (SC2249).
+#
+# shellcheck-py rather than the upstream Docker hook: this is a Rust repo and
+# a Docker daemon is a heavy thing to require of anyone running `prek` on a
+# staged shell script.
+# ci.yaml installs the shellcheck that actionlint shells out to, at the version
+# in this block's `# frozen: <tag>` comment (`.github/scripts/prek-frozen-tag.sh`
+# reads it), rather than pinning its own copy. `rev` and the comment must move
+# together; Renovate's prek manager moves both.
+repo = "https://github.com/shellcheck-py/shellcheck-py"
+rev = "745eface02aef23e168a8afb6b5737818efbea95" # frozen: v0.11.0.1
+hooks = [
+  { id = "shellcheck" },
+]
+
+[[repos]]
+# Workflow syntax and expression errors, plus `run:` blocks, which actionlint
+# extracts and shells out to shellcheck for — conditional on shellcheck being
+# on PATH. actionlint only warns under -verbose when the binary is missing and
+# otherwise silently skips that rule; the `shellcheck-on-path` local hook
+# above turns a missing binary into a loud failure instead, so this can no
+# longer pass quietly in either a local `prek run` or CI's `prek run
+# --all-files`.
+#
+# actionlint invokes shellcheck with `--norc`, so `.shellcheckrc` cannot reach
+# `run:` blocks. The options are therefore set as this hook's own environment,
+# which keeps them in the same file as every other lint setting. Keep this
+# list in step with `.shellcheckrc`, which governs standalone scripts.
+repo = "https://github.com/rhysd/actionlint"
+rev = "914e7df21a07ef503a81201c76d2b11c789d3fca" # frozen: v1.7.12
+hooks = [
+  { id = "actionlint", env = { SHELLCHECK_OPTS = "--enable=add-default-case,check-extra-masked-returns" } },
+]
+
+[[repos]]
+repo = "https://github.com/editorconfig-checker/editorconfig-checker.python"
+rev = "e8b4e28241a9ae8296ba6e4a491b5da4eda73283" # frozen: 3.11.1
+hooks = [
+  { id = "editorconfig-checker", exclude_types = ["rust", "markdown"] },
+]
