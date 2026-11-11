@@ -285,3 +285,12 @@ fn an_rpath_that_is_not_utf8_is_still_reported() {
     assert_eq!(found[0].kind, ViolationKind::MachoRpath);
     assert!(found[0].detail.contains("/usr/\u{FFFD}zmarker"), "{}", found[0].detail);
 }
+
+/// Only a `DYLD_*_PATH` value is read as a path list: the bytes of any other variable's value do not matter.
+#[test]
+fn a_dyld_variable_that_is_not_a_search_path_may_hold_bytes_that_are_not_utf8() {
+    for setting in ["DYLD_IMAGE_SUFFIX=_zzmarker", "DYLD_PRINT_LIBRARIES=zzmarker"] {
+        let image = not_utf8(macho(&[dylinker_command(LC_DYLD_ENVIRONMENT, setting)]), "zzmarker");
+        assert_eq!(kinds(&image), vec![], "{setting}");
+    }
+}

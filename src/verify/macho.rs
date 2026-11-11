@@ -40,13 +40,16 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
             // directories; the others (`DYLD_IMAGE_SUFFIX`, `DYLD_PRINT_*`) are not searches.
             LoadCommandVariant::DyldEnvironment(environment) => {
                 let setting = command.string(endian, environment.name).map_err(unreadable)?;
-                let setting = utf8("LC_DYLD_ENVIRONMENT", setting)?;
-                let Some((variable, value)) = setting.split_once('=') else {
+                let Some(equals) = setting.iter().position(|&byte| byte == b'=') else {
                     continue;
                 };
-                if !(variable.starts_with("DYLD_") && variable.ends_with("_PATH")) {
+                let (variable, value) = (&setting[..equals], &setting[equals + 1..]);
+                if !(variable.starts_with(b"DYLD_") && variable.ends_with(b"_PATH")) {
                     continue;
                 }
+                // Only a search path's value is read as text; any other variable's bytes do not matter.
+                let variable = utf8("LC_DYLD_ENVIRONMENT variable", variable)?;
+                let value = utf8("LC_DYLD_ENVIRONMENT", value)?;
                 // dyld joins an empty element to the leaf name as `/leaf` (a path in the root directory), so it
                 // is not a search relative to anything.
                 for element in value
