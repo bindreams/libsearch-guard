@@ -9,22 +9,121 @@ use super::{unreadable, Violation, ViolationKind};
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
 
-/// Name prefixes (lower case) of the Visual C++ redistributable DLLs: they are not in System32, so an import
-/// is searched for in the executable's folder first.
-const REDISTRIBUTABLE_PREFIXES: [&str; 7] = ["vcruntime", "concrt", "vcomp", "vccorlib", "vcamp", "mfc", "ucrtbased"];
+/// Whether the DLL `name` (lower case) is a Visual C++ redistributable: not part of Windows, so an import of it
+/// is searched for in the executable's folder, and is not found in System32 where the redistributable is not
+/// installed. Names are matched exactly, by family, version digits and the suffixes each family has: the
+/// Windows DLLs that begin like one (`msvcp_win`, `msvcp110_win`, `msvcp60`, `msvcrt`, `mfcore`, `mfc42`, the
+/// `*_clr0400` copies, `atl`) do not match.
+fn is_redistributable(name: &str) -> bool {
+    let stem = name.strip_suffix(".dll").unwrap_or(name);
+    if stem == "ucrtbased" {
+        return true;
+    }
+    REDISTRIBUTABLE_FAMILIES.iter().any(|family| {
+        let Some(rest) = stem.strip_prefix(family.prefix) else {
+            return false;
+        };
+        let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        let (version, suffix) = rest.split_at(digits_end);
+        !version.is_empty() && !family.ships_in_windows.contains(&version) && (family.suffix)(suffix)
+    })
+}
 
-/// Like [`REDISTRIBUTABLE_PREFIXES`], but a name matches only when a version digit follows: `msvcp_win.dll`,
-/// `msvcrt.dll` (a KnownDLL) and `atl.dll` are part of Windows, and the redistributable ones are `msvcp140`,
-/// `msvcr100`, `atl100`.
-const VERSIONED_PREFIXES: [&str; 3] = ["msvcp", "msvcr", "atl"];
+/// A redistributable DLL family: `<prefix><version digits><suffix>`.
+struct Family {
+    prefix: &'static str,
+    /// Versions of this family that are part of Windows.
+    ships_in_windows: &'static [&'static str],
+    /// Whether the text after the version digits is one the family has.
+    suffix: fn(&str) -> bool,
+}
 
-fn is_redistributable(lower: &str) -> bool {
-    REDISTRIBUTABLE_PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
-        || VERSIONED_PREFIXES.iter().any(|prefix| {
-            lower
-                .strip_prefix(prefix)
-                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        })
+const REDISTRIBUTABLE_FAMILIES: [Family; 10] = [
+    Family {
+        prefix: "vcruntime",
+        ships_in_windows: &[],
+        suffix: vcruntime_suffix,
+    },
+    Family {
+        prefix: "msvcp",
+        ships_in_windows: &["60"],
+        suffix: msvcp_suffix,
+    },
+    Family {
+        prefix: "msvcr",
+        ships_in_windows: &[],
+        suffix: debug_suffix,
+    },
+    Family {
+        prefix: "concrt",
+        ships_in_windows: &[],
+        suffix: debug_suffix,
+    },
+    Family {
+        prefix: "vcomp",
+        ships_in_windows: &[],
+        suffix: debug_suffix,
+    },
+    Family {
+        prefix: "vccorlib",
+        ships_in_windows: &[],
+        suffix: debug_suffix,
+    },
+    Family {
+        prefix: "vcamp",
+        ships_in_windows: &[],
+        suffix: debug_suffix,
+    },
+    Family {
+        prefix: "mfc",
+        ships_in_windows: &["40", "42"],
+        suffix: mfc_suffix,
+    },
+    Family {
+        prefix: "mfcm",
+        ships_in_windows: &[],
+        suffix: mfcm_suffix,
+    },
+    Family {
+        prefix: "atl",
+        ships_in_windows: &[],
+        suffix: str::is_empty,
+    },
+];
+
+fn debug_suffix(suffix: &str) -> bool {
+    matches!(suffix, "" | "d")
+}
+
+/// `_<digits>` with an optional debug `d`: `msvcp140_1`, `vcruntime140_1d`.
+fn numbered_suffix(suffix: &str) -> bool {
+    let Some(rest) = suffix.strip_prefix('_') else {
+        return false;
+    };
+    let digits = rest.strip_suffix('d').unwrap_or(rest);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn vcruntime_suffix(suffix: &str) -> bool {
+    debug_suffix(suffix) || numbered_suffix(suffix) || matches!(suffix, "_threads" | "_threadsd")
+}
+
+fn msvcp_suffix(suffix: &str) -> bool {
+    debug_suffix(suffix)
+        || numbered_suffix(suffix)
+        || matches!(
+            suffix,
+            "_atomic_wait" | "_codecvt_ids" | "d_atomic_wait" | "d_codecvt_ids"
+        )
+}
+
+fn mfcm_suffix(suffix: &str) -> bool {
+    matches!(suffix, "" | "u" | "d" | "ud")
+}
+
+/// The MFC DLLs, and its language packs (`mfc140deu`, three letters).
+fn mfc_suffix(suffix: &str) -> bool {
+    mfcm_suffix(suffix) || (suffix.len() == 3 && suffix.bytes().all(|b| b.is_ascii_lowercase()))
 }
 
 pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -> Result<(), super::VerifyError> {

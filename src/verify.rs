@@ -30,9 +30,10 @@ mod verify_tests;
 pub enum ViolationKind {
     /// PE: the load config's `DependentLoadFlags` lack `LOAD_LIBRARY_SEARCH_SYSTEM32` (0x800).
     PeDependentLoadFlags,
-    /// PE: imports, or delay-loads, a Visual C++ redistributable DLL (`vcruntime*`, `msvcp<n>*`, `msvcr<n>*`, `atl<n>*`,
-    /// `concrt*`, `vcomp*`, `vccorlib*`, `vcamp*`, `mfc*`, `ucrtbased*`), which Windows searches for in the
-    /// executable's folder first.
+    /// PE: imports, or delay-loads, a Visual C++ redistributable DLL (`vcruntime<n>`, `msvcp<n>`, `msvcr<n>`,
+    /// `concrt<n>`, `vcomp<n>`, `vccorlib<n>`, `vcamp<n>`, `mfc<n>`, `mfcm<n>`, `atl<n>` with their `_<n>`, debug
+    /// and language variants, and `ucrtbased`), which Windows searches for in the executable's folder first.
+    /// The DLLs that ship in Windows (`msvcp_win`, `msvcrt`, `mfcore`, `mfc42`, ...) are not reported.
     PeRuntimeImport,
     /// ELF: an `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative.
     ElfSearchPath,

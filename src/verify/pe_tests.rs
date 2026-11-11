@@ -75,19 +75,26 @@ fn every_redistributable_runtime_is_reported() {
         "vcruntime140.dll",
         "vcruntime140_1.dll",
         "vcruntime140d.dll",
+        "vcruntime140_1d.dll",
+        "vcruntime140_threads.dll",
         "msvcp140.dll",
         "msvcp140_1.dll",
+        "msvcp140_2d.dll",
         "msvcp140d.dll",
+        "msvcp140_atomic_wait.dll",
+        "msvcp140d_codecvt_ids.dll",
         "msvcp120.dll",
         "msvcp210.dll",
-        "msvcp60.dll",
         "concrt140.dll",
         "vcomp140.dll",
         "vccorlib140.dll",
         "vcamp140.dll",
         "mfc140.dll",
         "mfc140u.dll",
+        "mfc140ud.dll",
+        "mfc140deu.dll",
         "mfcm140.dll",
+        "mfcm140ud.dll",
     ] {
         assert_eq!(runtime_import_kinds(dll), vec![ViolationKind::PeRuntimeImport], "{dll}");
     }
@@ -136,18 +143,30 @@ fn runtime_imports_are_reported_in_any_case() {
     }
 }
 
-/// `msvcp_win.dll`, `msvcrt.dll` (a KnownDLL) and `atl.dll` are part of Windows; the redistributable
-/// `msvcp140.dll`, `msvcr100.dll` and `atl100.dll` are not.
+/// What ships in Windows, and so is not a redistributable, although its name starts like one. Each name was
+/// checked in `System32` or `SysWOW64`.
 #[test]
-fn system_dlls_with_a_runtime_like_name_are_not_reported() {
+fn windows_dlls_with_a_runtime_like_name_are_not_reported() {
     for dll in [
         "msvcp_win.dll",
         "MSVCP_WIN.dll",
+        "msvcp110_win.dll",
+        "msvcp60.dll",
+        "msvcp140_clr0400.dll",
         "msvcrt.dll",
         "MSVCRT.dll",
+        "msvcrt20.dll",
+        "msvcr120_clr0400.dll",
+        "vcruntime140_clr0400.dll",
+        "mfcore.dll",
+        "mfcsubs.dll",
+        "mfc40.dll",
+        "mfc42.dll",
+        "mfc42u.dll",
         "atl.dll",
+        "atlthunk.dll",
         "ucrtbase.dll",
-        "ucrtbase.dll",
+        "ucrtbase_clr0400.dll",
         "api-ms-win-crt-runtime-l1-1-0.dll",
     ] {
         assert_eq!(runtime_import_kinds(dll), vec![], "{dll}");
