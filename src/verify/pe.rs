@@ -1,5 +1,5 @@
-//! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32`, and no runtime
-//! DLL (`vcruntime*`, `msvcp*`) is imported.
+//! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32`, and no Visual C++
+//! redistributable DLL is imported.
 
 use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG};
 use object::read::pe::{ImageNtHeaders, PeFile};
@@ -8,6 +8,20 @@ use object::LittleEndian as LE;
 use super::{unreadable, Violation, ViolationKind};
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
+
+/// Name prefixes (lower case) of the Visual C++ redistributable DLLs: they are not in System32, so an import
+/// is searched for in the executable's folder first. `msvcp_win.dll` is part of Windows and is not one of
+/// them, which is why the C++ standard library is matched by its version digit.
+const REDISTRIBUTABLE_PREFIXES: [&str; 8] = [
+    "vcruntime",
+    "msvcp1",
+    "msvcp2",
+    "concrt",
+    "vcomp",
+    "vccorlib",
+    "vcamp",
+    "mfc",
+];
 
 pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -> Result<(), super::VerifyError> {
     let file = PeFile::<Pe, _>::parse(data).map_err(unreadable)?;
@@ -26,7 +40,7 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
             let name = imports.name(descriptor.name.get(LE)).map_err(unreadable)?;
             let name = String::from_utf8_lossy(name);
             let lower = name.to_ascii_lowercase();
-            if lower.starts_with("vcruntime") || lower.starts_with("msvcp") {
+            if REDISTRIBUTABLE_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) {
                 out.push(Violation {
                     kind: ViolationKind::PeRuntimeImport,
                     detail: format!("imports {name}, which is searched for in the executable's folder first"),

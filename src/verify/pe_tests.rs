@@ -56,19 +56,53 @@ fn load_config_too_short_to_hold_the_flags_is_reported() {
     assert_eq!(kinds(&image), vec![ViolationKind::PeDependentLoadFlags]);
 }
 
+fn runtime_import_kinds(dll: &str) -> Vec<ViolationKind> {
+    kinds(&pe(&Pe {
+        imports: &["KERNEL32.dll", dll],
+        load_config: Some((0x800, FULL)),
+    }))
+}
+
+#[test]
+fn every_redistributable_runtime_is_reported() {
+    for dll in [
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "vcruntime140d.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140d.dll",
+        "msvcp120.dll",
+        "msvcp210.dll",
+        "concrt140.dll",
+        "vcomp140.dll",
+        "vccorlib140.dll",
+        "vcamp140.dll",
+        "mfc140.dll",
+        "mfc140u.dll",
+        "mfcm140.dll",
+    ] {
+        assert_eq!(runtime_import_kinds(dll), vec![ViolationKind::PeRuntimeImport], "{dll}");
+    }
+}
+
 #[test]
 fn runtime_imports_are_reported_in_any_case() {
+    for dll in ["VCRUNTIME140.dll", "MSVCP140.dll", "Concrt140.DLL", "MFC140U.dll"] {
+        assert_eq!(runtime_import_kinds(dll), vec![ViolationKind::PeRuntimeImport], "{dll}");
+    }
+}
+
+/// `msvcp_win.dll` is part of Windows and lives in System32; the redistributable `msvcp140.dll` does not.
+#[test]
+fn system_dlls_with_a_runtime_like_name_are_not_reported() {
     for dll in [
-        "VCRUNTIME140.dll",
-        "vcruntime140_1.dll",
-        "MSVCP140.dll",
-        "msvcp140d.dll",
+        "msvcp_win.dll",
+        "MSVCP_WIN.dll",
+        "ucrtbase.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
     ] {
-        let image = pe(&Pe {
-            imports: &["KERNEL32.dll", dll],
-            load_config: Some((0x800, FULL)),
-        });
-        assert_eq!(kinds(&image), vec![ViolationKind::PeRuntimeImport], "{dll}");
+        assert_eq!(runtime_import_kinds(dll), vec![], "{dll}");
     }
 }
 

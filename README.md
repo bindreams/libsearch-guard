@@ -57,7 +57,7 @@ fn the_binary_is_hardened() {
 
 | Format | A violation is                                                                                                  |
 | ------ | --------------------------------------------------------------------------------------------------------------- |
-| PE     | `DependentLoadFlags` without 0x800; an import of `vcruntime*` or `msvcp*`                                       |
+| PE     | `DependentLoadFlags` without 0x800; an import of a Visual C++ redistributable DLL: `vcruntime*`, `msvcp1*`, `msvcp2*`, `concrt*`, `vcomp*`, `vccorlib*`, `vcamp*`, `mfc*` (not `msvcp_win`, which is part of Windows)                                       |
 | ELF    | an RPATH or RUNPATH element that is `$ORIGIN`-based or relative (every element must be absolute); a `DT_NEEDED` that contains a `/` but does not start with one |
 | Mach-O | any `LC_RPATH`; a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based or relative; an `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH` list |
 
