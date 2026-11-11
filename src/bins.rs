@@ -41,16 +41,18 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///   process writes the error to stderr and terminates before `main`.
 ///
 /// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
-/// package's library, integration tests, examples and `cdylib`s are not affected. On every other target
-/// this does nothing.
+/// package's library, integration tests, examples and `cdylib`s are not affected. On a target that is not
+/// Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it fails the build (see
+/// Panics).
 ///
 /// Call it only from a package that has a `[[bin]]`: cargo rejects the link arguments otherwise.
 ///
 /// # Panics
 ///
 /// - If it is not called from a build script.
-/// - On a Windows target that is not `*-windows-msvc`: GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot
-///   be hardened, and a bin that silently is not would be worse than a failed build.
+/// - On a Windows target that is not `*-windows-msvc`, or on Cygwin (whose executables are PE files loaded by
+///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened, and a bin that
+///   silently is not would be worse than a failed build.
 /// - If compiling the initializer fails. It needs a prebuilt `core` for the target, so tier 3 targets and
 ///   `-Zbuild-std` builds are not supported.
 pub fn bins() {
@@ -82,6 +84,10 @@ fn hardens(os: &str, env: &str) -> Result<bool, String> {
         ("windows", _) => Err(format!(
             "only windows-msvc is supported on Windows (this target's env is {env:?}): GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
         )),
+        ("cygwin", _) => Err(
+            "cygwin is not supported: its executables are PE files loaded by the Windows loader, and GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
+                .into(),
+        ),
         _ => Ok(false),
     }
 }

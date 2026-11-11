@@ -12,6 +12,18 @@ fn other_operating_systems_are_left_alone() {
     }
 }
 
+/// Cygwin executables are PE files, loaded by the Windows loader like any other.
+#[test]
+fn cygwin_is_refused_with_the_reason() {
+    for env in ["", "gnu"] {
+        let message = hardens("cygwin", env).unwrap_err();
+        assert!(
+            message.contains("cygwin") && message.contains("DEPENDENTLOADFLAG"),
+            "{env}: {message}"
+        );
+    }
+}
+
 #[test]
 fn windows_targets_other_than_msvc_are_refused_with_the_reason() {
     for env in ["gnu", "gnullvm", ""] {
