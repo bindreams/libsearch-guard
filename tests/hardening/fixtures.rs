@@ -152,8 +152,21 @@ pub fn hardened_probe_bench_harness() -> &'static Path {
     })
 }
 
+/// Whether `name` is an environment variable that changes how cargo builds: the flags that cargo passes to
+/// rustc, and the target it builds for. A fixture build sets its own flags, so it must not inherit the
+/// outer run's.
+fn is_build_override(name: &str) -> bool {
+    matches!(
+        name,
+        "CARGO_ENCODED_RUSTFLAGS" | "RUSTFLAGS" | "CARGO_BUILD_RUSTFLAGS" | "CARGO_BUILD_TARGET"
+    ) || (name.starts_with("CARGO_TARGET_") && name.ends_with("_RUSTFLAGS"))
+}
+
 /// Runs `cargo <subcommand>` on a fixture package in its own target directory and returns the package's
 /// artifacts from cargo's JSON messages. Panics, with cargo's stderr, when cargo fails.
+///
+/// The build does not inherit the outer environment's rustc flags or target (see [`is_build_override`]); only
+/// `envs` set them.
 fn cargo(subcommand: &[&str], package: &str, target_dir_name: &str, envs: &[(&str, &str)]) -> Vec<Artifact> {
     let target_dir = Path::new(TARGET_TMPDIR).join(target_dir_name);
     let package_manifest = canonical(
@@ -162,7 +175,13 @@ fn cargo(subcommand: &[&str], package: &str, target_dir_name: &str, envs: &[(&st
             .join(package)
             .join("Cargo.toml"),
     );
-    let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+    let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(is_build_override) {
+            command.env_remove(name);
+        }
+    }
+    let output = command
         .args(subcommand)
         .args([
             "--locked",
