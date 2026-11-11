@@ -1,4 +1,4 @@
-//! libsearch-guard pre-main initializer (spike A).
+//! Pre-`main` initializer: restricts the default DLL search to System32, or terminates the process.
 #![no_std]
 #![allow(non_snake_case)]
 
