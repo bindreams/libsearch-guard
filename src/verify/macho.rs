@@ -5,7 +5,7 @@
 
 use object::read::macho::{LoadCommandVariant, MachHeader};
 
-use super::{unreadable, VerifyError, Violation, ViolationKind};
+use super::{unreadable, utf8, VerifyError, Violation, ViolationKind};
 
 pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
     data: &[u8],
@@ -21,16 +21,17 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
                 let path = command.string(endian, rpath.path).map_err(unreadable)?;
                 out.push(Violation {
                     kind: ViolationKind::MachoRpath,
-                    detail: format!("LC_RPATH {:?}", String::from_utf8_lossy(path)),
+                    detail: format!("LC_RPATH {:?}", utf8("LC_RPATH", path)?),
                 });
             }
             // `LC_ID_DYLIB` (the `IdDylib` variant) names the library itself, not something it searches for.
             LoadCommandVariant::Dylib(dylib) => {
                 let name = command.string(endian, dylib.dylib.name).map_err(unreadable)?;
-                if !name.starts_with(b"/") {
+                let name = utf8("dylib", name)?;
+                if !name.starts_with('/') {
                     out.push(Violation {
                         kind: ViolationKind::MachoDylib,
-                        detail: format!("dylib {:?} is not an absolute path", String::from_utf8_lossy(name)),
+                        detail: format!("dylib {name:?} is not an absolute path"),
                     });
                 }
             }
@@ -38,7 +39,7 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
             // directories; the others (`DYLD_IMAGE_SUFFIX`, `DYLD_PRINT_*`) are not searches.
             LoadCommandVariant::DyldEnvironment(environment) => {
                 let setting = command.string(endian, environment.name).map_err(unreadable)?;
-                let setting = String::from_utf8_lossy(setting);
+                let setting = utf8("LC_DYLD_ENVIRONMENT", setting)?;
                 let Some((variable, value)) = setting.split_once('=') else {
                     continue;
                 };

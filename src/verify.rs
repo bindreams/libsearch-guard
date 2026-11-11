@@ -196,6 +196,17 @@ fn check_slices<A: FatArch>(arches: &[A], data: &[u8], out: &mut Vec<Violation>)
     Ok(())
 }
 
+/// `bytes` as text, or an unreadable file: the loader reads them as bytes, and a lossy copy could pass what it
+/// would load.
+fn utf8<'a>(what: &str, bytes: &'a [u8]) -> Result<&'a str, VerifyError> {
+    std::str::from_utf8(bytes).map_err(|_| {
+        VerifyError::unreadable(format!(
+            "{what} {:?} is not valid UTF-8",
+            String::from_utf8_lossy(bytes)
+        ))
+    })
+}
+
 fn unreadable(error: object::Error) -> VerifyError {
     VerifyError::unreadable(error.to_string())
 }

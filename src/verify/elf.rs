@@ -18,7 +18,7 @@ use object::elf::{
 use object::read::elf::{Dyn, FileHeader, ProgramHeader};
 use object::read::StringTable;
 
-use super::{unreadable, VerifyError, Violation, ViolationKind};
+use super::{unreadable, utf8, VerifyError, Violation, ViolationKind};
 
 pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
     data: &[u8],
@@ -32,13 +32,11 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
         let Some(interpreter) = segment.interpreter(endian, data).map_err(unreadable)? else {
             continue;
         };
-        if !interpreter.starts_with(b"/") {
+        let interpreter = utf8("PT_INTERP", interpreter)?;
+        if !interpreter.starts_with('/') {
             out.push(Violation {
                 kind: ViolationKind::ElfInterpreter,
-                detail: format!(
-                    "PT_INTERP {:?} is a relative path, opened against the working directory",
-                    String::from_utf8_lossy(interpreter)
-                ),
+                detail: format!("PT_INTERP {interpreter:?} is a relative path, opened against the working directory"),
             });
         }
     }
@@ -111,7 +109,7 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
             _ => continue,
         };
         let value = entry.string(endian, strings).map_err(unreadable)?;
-        let value = String::from_utf8_lossy(value);
+        let value = utf8(name, value)?;
         if tag == DT_NEEDED {
             if is_relative_path(&value) {
                 out.push(Violation {

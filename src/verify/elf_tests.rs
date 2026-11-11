@@ -1,5 +1,5 @@
 use super::crafted::{
-    elf, elf_image, elf_with_interpreter, elf_with_unmapped_strtab, Elf, StringTable, DT_AUDIT, DT_AUXILIARY,
+    elf, elf_image, elf_with_interpreter, elf_with_unmapped_strtab, not_utf8, Elf, StringTable, DT_AUDIT, DT_AUXILIARY,
     DT_DEPAUDIT, DT_FILTER, DT_NEEDED, DT_RPATH, DT_RUNPATH,
 };
 use super::{verify_bytes, VerifyError, ViolationKind};
@@ -242,4 +242,47 @@ fn a_string_table_in_a_later_load_segment_is_read() {
         ..Elf::default()
     });
     assert_eq!(kinds(&image), vec![ViolationKind::ElfSearchPath]);
+}
+
+/// A name the loader would read as bytes, and this crate cannot read as text, is a file it cannot check: not a pass.
+#[test]
+fn a_string_that_is_not_utf8_is_unreadable() {
+    let tags = [
+        (DT_RPATH, "DT_RPATH"),
+        (DT_RUNPATH, "DT_RUNPATH"),
+        (DT_NEEDED, "DT_NEEDED"),
+        (DT_AUDIT, "DT_AUDIT"),
+        (DT_DEPAUDIT, "DT_DEPAUDIT"),
+        (DT_FILTER, "DT_FILTER"),
+        (DT_AUXILIARY, "DT_AUXILIARY"),
+    ];
+    for (tag, name) in tags {
+        let image = not_utf8(elf(&[(tag, "/usr/lib/zzmarker")]), "zzmarker");
+        let result = verify_bytes(&image);
+        assert!(
+            matches!(result, Err(VerifyError::Unreadable { .. })),
+            "{name}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn an_interpreter_that_is_not_utf8_is_unreadable() {
+    let image = not_utf8(elf_with_interpreter(&[], "/lib/zzmarker"), "zzmarker");
+    let result = verify_bytes(&image);
+    assert!(matches!(result, Err(VerifyError::Unreadable { .. })), "{result:?}");
+}
+
+/// What was found before the string that cannot be read is kept.
+#[test]
+fn violations_found_before_a_string_that_is_not_utf8_are_kept() {
+    let image = not_utf8(
+        elf(&[(DT_RUNPATH, "$ORIGIN"), (DT_NEEDED, "/usr/lib/zzmarker")]),
+        "zzmarker",
+    );
+    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
+        panic!("expected an unreadable file");
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, ViolationKind::ElfSearchPath);
 }

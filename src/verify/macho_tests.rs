@@ -1,6 +1,7 @@
 use super::crafted::{
-    dylib_command, dylinker_command, elf, macho, macho32, macho_fat, rpath_command, LC_DYLD_ENVIRONMENT, LC_ID_DYLIB,
-    LC_LAZY_LOAD_DYLIB, LC_LOAD_DYLIB, LC_LOAD_DYLINKER, LC_LOAD_UPWARD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB,
+    dylib_command, dylinker_command, elf, macho, macho32, macho_fat, not_utf8, rpath_command, LC_DYLD_ENVIRONMENT,
+    LC_ID_DYLIB, LC_LAZY_LOAD_DYLIB, LC_LOAD_DYLIB, LC_LOAD_DYLINKER, LC_LOAD_UPWARD_DYLIB, LC_LOAD_WEAK_DYLIB,
+    LC_REEXPORT_DYLIB,
 };
 use super::{verify_bytes, VerifyError, ViolationKind};
 
@@ -249,4 +250,27 @@ fn a_32_bit_macho_is_checked() {
         kinds(&macho32(&[dylib_command(LC_LOAD_DYLIB, "/usr/lib/libSystem.B.dylib")])),
         vec![]
     );
+}
+
+/// A path dyld would read as bytes, and this crate cannot read as text, is a file it cannot check: not a pass.
+#[test]
+fn a_path_that_is_not_utf8_is_unreadable() {
+    let images = [
+        ("LC_RPATH", macho(&[rpath_command("/usr/zzmarker")])),
+        (
+            "LC_LOAD_DYLIB",
+            macho(&[dylib_command(LC_LOAD_DYLIB, "/usr/lib/zzmarker.dylib")]),
+        ),
+        (
+            "LC_DYLD_ENVIRONMENT",
+            macho(&[dylinker_command(LC_DYLD_ENVIRONMENT, "DYLD_LIBRARY_PATH=/usr/zzmarker")]),
+        ),
+    ];
+    for (name, image) in images {
+        let result = verify_bytes(&not_utf8(image, "zzmarker"));
+        assert!(
+            matches!(result, Err(VerifyError::Unreadable { .. })),
+            "{name}: {result:?}"
+        );
+    }
 }
