@@ -10,12 +10,28 @@ pub fn put(buf: &mut Vec<u8>, at: usize, bytes: &[u8]) {
 
 // ELF =====
 
+pub const DT_NEEDED: u64 = 1;
 pub const DT_RPATH: u64 = 15;
 pub const DT_RUNPATH: u64 = 29;
 
-/// ELF64, little-endian, with `.dynstr` and `.dynamic` sections holding one search-path entry per `(tag, value)`.
-/// No entries gives an image with no `.dynamic` section.
+const DT_STRTAB: u64 = 5;
+const DT_STRSZ: u64 = 10;
+/// Where the one `PT_LOAD` segment of a crafted image is mapped: the file's offset 0 is at this address.
+const LOAD_ADDRESS: u64 = 0x40_0000;
+
+/// ELF64, little-endian, with no section headers, as a stripped image has: a `PT_LOAD` segment that maps the
+/// whole file, and a `PT_DYNAMIC` segment holding one string entry per `(tag, value)` plus `DT_STRTAB` and
+/// `DT_STRSZ`. No entries gives an image with no `PT_DYNAMIC`.
 pub fn elf(entries: &[(u64, &str)]) -> Vec<u8> {
+    elf_with_strtab_at(entries, LOAD_ADDRESS)
+}
+
+/// [`elf`], but `DT_STRTAB` points outside the file's one `PT_LOAD` segment, so the strings cannot be read.
+pub fn elf_with_unmapped_strtab(entries: &[(u64, &str)]) -> Vec<u8> {
+    elf_with_strtab_at(entries, LOAD_ADDRESS + 0x1000_0000)
+}
+
+fn elf_with_strtab_at(entries: &[(u64, &str)], base: u64) -> Vec<u8> {
     let mut dynstr = vec![0u8];
     let mut offsets = Vec::new();
     for (_, value) in entries {
@@ -23,71 +39,54 @@ pub fn elf(entries: &[(u64, &str)]) -> Vec<u8> {
         dynstr.extend_from_slice(value.as_bytes());
         dynstr.push(0);
     }
-    let mut dynamic = Vec::new();
-    for ((tag, _), off) in entries.iter().zip(&offsets) {
-        dynamic.extend_from_slice(&tag.to_le_bytes());
-        dynamic.extend_from_slice(&off.to_le_bytes());
-    }
-    dynamic.extend_from_slice(&[0u8; 16]); // DT_NULL
-
-    let dynstr_off = 64usize;
-    let dynamic_off = (dynstr_off + dynstr.len()).next_multiple_of(8);
-    let shoff = (dynamic_off + dynamic.len()).next_multiple_of(8);
     let have_dynamic = !entries.is_empty();
-    let shnum: u16 = if have_dynamic { 3 } else { 2 };
+    let phnum: u16 = if have_dynamic { 2 } else { 0 };
+    let dynstr_off = 64 + 56 * phnum as usize;
+    let dynamic_off = (dynstr_off + dynstr.len()).next_multiple_of(8);
+
+    let mut dynamic = Vec::new();
+    let mut entry = |tag: u64, value: u64| {
+        dynamic.extend_from_slice(&tag.to_le_bytes());
+        dynamic.extend_from_slice(&value.to_le_bytes());
+    };
+    for ((tag, _), off) in entries.iter().zip(&offsets) {
+        entry(*tag, *off);
+    }
+    entry(DT_STRTAB, base + dynstr_off as u64);
+    entry(DT_STRSZ, dynstr.len() as u64);
+    entry(0, 0); // DT_NULL
 
     let mut img = vec![0u8; 64];
-    img[..4].copy_from_slice(b"\x7fELF");
+    img[..4].copy_from_slice(b"ELF");
     img[4] = 2; // ELFCLASS64
     img[5] = 1; // little-endian
     img[6] = 1; // EV_CURRENT
     put(&mut img, 16, &3u16.to_le_bytes()); // ET_DYN
     put(&mut img, 18, &0x3eu16.to_le_bytes()); // x86-64
     put(&mut img, 20, &1u32.to_le_bytes());
-    put(&mut img, 40, &(shoff as u64).to_le_bytes()); // e_shoff
+    put(&mut img, 32, &64u64.to_le_bytes()); // e_phoff
     put(&mut img, 52, &64u16.to_le_bytes()); // e_ehsize
     put(&mut img, 54, &56u16.to_le_bytes()); // e_phentsize
+    put(&mut img, 56, &phnum.to_le_bytes());
     put(&mut img, 58, &64u16.to_le_bytes()); // e_shentsize
-    put(&mut img, 60, &shnum.to_le_bytes());
-    put(&mut img, 62, &1u16.to_le_bytes()); // e_shstrndx: .dynstr doubles as the (all-empty) name table
+    if !have_dynamic {
+        return img;
+    }
     put(&mut img, dynstr_off, &dynstr);
-    if have_dynamic {
-        put(&mut img, dynamic_off, &dynamic);
-    }
-    img.resize(shoff, 0);
-    // Section headers: null, .dynstr, and .dynamic when there are entries.
-    img.extend_from_slice(&[0u8; 64]);
-    let mut header = |kind: u32, offset: usize, size: usize, link: u32, entsize: u64| {
-        let mut h = [0u8; 64];
-        h[4..8].copy_from_slice(&kind.to_le_bytes());
-        h[24..32].copy_from_slice(&(offset as u64).to_le_bytes());
-        h[32..40].copy_from_slice(&(size as u64).to_le_bytes());
-        h[40..44].copy_from_slice(&link.to_le_bytes());
-        h[56..64].copy_from_slice(&entsize.to_le_bytes());
-        img.extend_from_slice(&h);
+    put(&mut img, dynamic_off, &dynamic);
+    let len = img.len() as u64;
+    let segment = |kind: u32, offset: u64, size: u64| {
+        let mut h = [0u8; 56];
+        h[0..4].copy_from_slice(&kind.to_le_bytes());
+        h[4..8].copy_from_slice(&4u32.to_le_bytes()); // PF_R
+        h[8..16].copy_from_slice(&offset.to_le_bytes());
+        h[16..24].copy_from_slice(&(LOAD_ADDRESS + offset).to_le_bytes());
+        h[32..40].copy_from_slice(&size.to_le_bytes());
+        h[40..48].copy_from_slice(&size.to_le_bytes());
+        h
     };
-    header(3, dynstr_off, dynstr.len(), 0, 0); // SHT_STRTAB
-    if have_dynamic {
-        header(6, dynamic_off, dynamic.len(), 1, 16); // SHT_DYNAMIC, linked to .dynstr
-    }
-    img
-}
-
-/// ELF64 with no section headers and one `PT_DYNAMIC` segment, as a section-stripped binary would be.
-pub fn elf_without_sections() -> Vec<u8> {
-    let mut img = vec![0u8; 64 + 56];
-    img[..4].copy_from_slice(b"ELF");
-    img[4] = 2;
-    img[5] = 1;
-    img[6] = 1;
-    put(&mut img, 16, &3u16.to_le_bytes());
-    put(&mut img, 18, &0x3eu16.to_le_bytes());
-    put(&mut img, 20, &1u32.to_le_bytes());
-    put(&mut img, 32, &64u64.to_le_bytes()); // e_phoff
-    put(&mut img, 52, &64u16.to_le_bytes());
-    put(&mut img, 54, &56u16.to_le_bytes());
-    put(&mut img, 56, &1u16.to_le_bytes()); // e_phnum
-    put(&mut img, 64, &2u32.to_le_bytes()); // PT_DYNAMIC
+    put(&mut img, 64, &segment(1, 0, len)); // PT_LOAD
+    put(&mut img, 64 + 56, &segment(2, dynamic_off as u64, dynamic.len() as u64)); // PT_DYNAMIC
     img
 }
 

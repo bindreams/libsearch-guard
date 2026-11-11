@@ -33,6 +33,9 @@ pub enum ViolationKind {
     PeRuntimeImport,
     /// ELF: an `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative.
     ElfSearchPath,
+    /// ELF: a `DT_NEEDED` entry that contains a `/` but does not start with one. The loader opens it relative to
+    /// the working directory.
+    ElfNeeded,
     /// Mach-O: an `LC_RPATH` command.
     MachoRpath,
     /// Mach-O: a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based, or relative.
