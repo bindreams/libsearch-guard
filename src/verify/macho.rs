@@ -1,6 +1,7 @@
 //! Mach-O rules: no `LC_RPATH`; no dylib load command that is `@executable_path`-, `@loader_path`- or
 //! `@rpath`-based or relative; and no `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH`
-//! search path. Every dylib reference and every such directory must be an absolute path.
+//! search path. Every dylib reference and every such directory must be an absolute path (an empty element
+//! names the root directory and is not reported).
 
 use object::read::macho::{LoadCommandVariant, MachHeader};
 
@@ -44,7 +45,12 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
                 if !(variable.starts_with("DYLD_") && variable.ends_with("_PATH")) {
                     continue;
                 }
-                for element in value.split(':').filter(|element| !element.starts_with('/')) {
+                // dyld joins an empty element to the leaf name as `/leaf` (a path in the root directory), so it
+                // is not a search relative to anything.
+                for element in value
+                    .split(':')
+                    .filter(|element| !element.is_empty() && !element.starts_with('/'))
+                {
                     out.push(Violation {
                         kind: ViolationKind::MachoDyldEnvironment,
                         detail: format!("LC_DYLD_ENVIRONMENT {variable} element {element:?} is not an absolute path"),

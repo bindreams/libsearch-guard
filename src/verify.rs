@@ -24,8 +24,9 @@ mod pe_tests;
 #[cfg(test)]
 mod verify_tests;
 
-/// The rule a binary breaks.
+/// The rule a binary breaks. More rules may be added in a minor release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ViolationKind {
     /// PE: the load config's `DependentLoadFlags` lack `LOAD_LIBRARY_SEARCH_SYSTEM32` (0x800).
     PeDependentLoadFlags,

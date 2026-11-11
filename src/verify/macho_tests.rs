@@ -113,6 +113,20 @@ fn absolute_dyld_search_paths_and_other_dyld_variables_pass() {
     }
 }
 
+/// dyld joins an empty element to the leaf name as `/leaf`, a path in the root directory: neither relative to
+/// the binary nor to the working directory.
+#[test]
+fn an_empty_dyld_search_path_or_element_is_not_reported() {
+    for value in [
+        "DYLD_LIBRARY_PATH=",
+        "DYLD_LIBRARY_PATH=/usr/lib:",
+        "DYLD_FALLBACK_LIBRARY_PATH=:/usr/lib",
+        "DYLD_FRAMEWORK_PATH=/usr/lib::/opt/lib",
+    ] {
+        assert_eq!(dyld_environment(value), vec![], "{value}");
+    }
+}
+
 #[test]
 fn the_dynamic_linker_load_command_is_not_an_environment() {
     let image = macho(&[dylinker_command(LC_LOAD_DYLINKER, "/usr/lib/dyld")]);
