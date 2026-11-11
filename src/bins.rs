@@ -46,8 +46,8 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// What runs before that call, so that a `LoadLibrary` call without flags made there is not protected:
 ///
 /// - the executable's TLS callbacks (`.CRT$XL*`), which the loader calls before the CRT starts;
-/// - the `DllMain` (`DLL_PROCESS_ATTACH`) and TLS callbacks of every DLL the executable imports. Their own imports
-///   follow their own load flags, not the executable's, and their flagless `LoadLibrary` calls are not covered;
+/// - the `DllMain` (`DLL_PROCESS_ATTACH`) and TLS callbacks of every DLL the executable imports, which run before the
+///   guard, so their flagless `LoadLibrary` calls are not covered by it;
 /// - the CRT's own start-up code, and every `.CRT$XI*` initializer that sorts at or before `.CRT$XIAB`: the CRT's
 ///   `.CRT$XIAA` ones, and any object's `XIAA`, `XIA0` and the like;
 /// - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
