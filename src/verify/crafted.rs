@@ -96,6 +96,8 @@ pub fn elf_without_sections() -> Vec<u8> {
 pub const LC_LOAD_DYLIB: u32 = 0x0c;
 pub const LC_ID_DYLIB: u32 = 0x0d;
 pub const LC_RPATH: u32 = 0x8000_001c;
+pub const LC_LOAD_DYLINKER: u32 = 0x0e;
+pub const LC_DYLD_ENVIRONMENT: u32 = 0x27;
 
 /// One load command, ready for [`macho`].
 pub struct Command(Vec<u8>);
@@ -106,6 +108,15 @@ pub fn rpath_command(path: &str) -> Command {
     body.extend_from_slice(path.as_bytes());
     body.push(0);
     Command(command(LC_RPATH, body))
+}
+
+/// `LC_DYLD_ENVIRONMENT` or `LC_LOAD_DYLINKER`: a `dylinker_command` whose string is `value`.
+pub fn dylinker_command(cmd: u32, value: &str) -> Command {
+    let mut body = Vec::new();
+    body.extend_from_slice(&12u32.to_le_bytes()); // string offset
+    body.extend_from_slice(value.as_bytes());
+    body.push(0);
+    Command(command(cmd, body))
 }
 
 pub fn dylib_command(cmd: u32, name: &str) -> Command {

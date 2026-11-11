@@ -37,6 +37,9 @@ pub enum ViolationKind {
     MachoRpath,
     /// Mach-O: a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based, or relative.
     MachoDylib,
+    /// Mach-O: an `LC_DYLD_ENVIRONMENT` command that puts a `@executable_path`-, `@loader_path`- or
+    /// `@rpath`-based or relative directory on a `DYLD_*_PATH` search path.
+    MachoDyldEnvironment,
 }
 
 /// One broken rule, with what broke it.

@@ -59,7 +59,7 @@ fn the_binary_is_hardened() {
 | ------ | --------------------------------------------------------------------------------------------------------------- |
 | PE     | `DependentLoadFlags` without 0x800; an import of `vcruntime*` or `msvcp*`                                       |
 | ELF    | an RPATH or RUNPATH element that is `$ORIGIN`-based or relative (every element must be absolute)                |
-| Mach-O | any `LC_RPATH`; a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based or relative |
+| Mach-O | any `LC_RPATH`; a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based or relative; an `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH` list |
 
 A file it cannot read as one of these formats is an error, not a pass. Universal Mach-O binaries are checked slice by slice.
 

@@ -1,5 +1,6 @@
-//! Mach-O rules: no `LC_RPATH`, and no dylib load command that is `@executable_path`-, `@loader_path`- or
-//! `@rpath`-based or relative. Every dylib reference must be an absolute path.
+//! Mach-O rules: no `LC_RPATH`; no dylib load command that is `@executable_path`-, `@loader_path`- or
+//! `@rpath`-based or relative; and no `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH`
+//! search path. Every dylib reference and every such directory must be an absolute path.
 
 use object::read::macho::{LoadCommandVariant, MachHeader};
 
@@ -29,6 +30,24 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
                     out.push(Violation {
                         kind: ViolationKind::MachoDylib,
                         detail: format!("dylib {:?} is not an absolute path", String::from_utf8_lossy(name)),
+                    });
+                }
+            }
+            // The command's string is `VARIABLE=value`. The `DYLD_*_PATH` variables hold a `:`-separated list of
+            // directories; the others (`DYLD_IMAGE_SUFFIX`, `DYLD_PRINT_*`) are not searches.
+            LoadCommandVariant::DyldEnvironment(environment) => {
+                let setting = command.string(endian, environment.name).map_err(unreadable)?;
+                let setting = String::from_utf8_lossy(setting);
+                let Some((variable, value)) = setting.split_once('=') else {
+                    continue;
+                };
+                if !(variable.starts_with("DYLD_") && variable.ends_with("_PATH")) {
+                    continue;
+                }
+                for element in value.split(':').filter(|element| !element.starts_with('/')) {
+                    out.push(Violation {
+                        kind: ViolationKind::MachoDyldEnvironment,
+                        detail: format!("LC_DYLD_ENVIRONMENT {variable} element {element:?} is not an absolute path"),
                     });
                 }
             }
