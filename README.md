@@ -38,7 +38,7 @@ The call in item 3 comes from a tiny `#![no_std]` object that `bins()` compiles 
 Code that runs before the guard, where a `LoadLibrary` call without flags is not protected:
 
 - the executable's TLS callbacks (`.CRT$XL*`), which the loader calls before the CRT starts;
-- the `DllMain` (`DLL_PROCESS_ATTACH`) and TLS callbacks of every DLL the executable imports. The imports of those DLLs are covered by `/DEPENDENTLOADFLAG` (item 2); their flagless `LoadLibrary` calls are not;
+- the `DllMain` (`DLL_PROCESS_ATTACH`) and TLS callbacks of every DLL the executable imports. Their own imports follow their own load flags, not the executable's `/DEPENDENTLOADFLAG` (item 2), and their flagless `LoadLibrary` calls are not covered;
 - the CRT's own start-up code, and every `.CRT$XI*` initializer that sorts at or before `.CRT$XIAB`: the CRT's `.CRT$XIAA` ones, and any object's `XIAA`, `XIA0` and the like;
 - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 
