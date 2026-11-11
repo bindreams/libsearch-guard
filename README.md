@@ -31,11 +31,16 @@ On `windows` + `msvc` targets every `[[bin]]` gets:
 
 1. The C startup code and the VC runtime linked statically, so there is no `vcruntime140.dll` import. The Universal CRT stays dynamic, unless the build already sets `-C target-feature=+crt-static`: then the whole CRT, the Universal CRT included, is static and these arguments are skipped. (The link arguments are those of the [`static_vcruntime`](https://crates.io/crates/static_vcruntime) crate, which cannot limit them to bins.)
 2. `/DEPENDENTLOADFLAG:0x800` (`LOAD_LIBRARY_SEARCH_SYSTEM32`), so import-table loads search System32 only.
-3. A `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` call before `main`, so `LoadLibrary` calls without flags search System32 only. It runs in the `.CRT$XIAB` slot, which the CRT runs before every `.CRT$XC*` initializer: C++ static constructors and `ctor`-style crates, in the bin or in any dependency, come after it. If the call fails, the process writes the error to stderr (or, where there is no usable stderr, to the debugger with `OutputDebugStringA`) and terminates before `main`. A fast-fail trap follows the termination, so the process never reaches `main` unhardened.
+3. A `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` call before `main`, so `LoadLibrary` calls without flags search System32 only. It runs in the `.CRT$XIAB` slot, which the CRT runs before every `.CRT$XC*` initializer: C++ static constructors and `ctor`-style crates, in the bin or in any dependency, come after it. If the call fails, the process writes the error to stderr (or, where there is no usable stderr, to the debugger with `OutputDebugStringA`) and terminates before `main`. A fast-fail trap follows the termination (on x86, x64, ARM64, ARM64EC and ARM32; an endless loop on any other architecture), so the process never reaches `main` unhardened.
 
 The call in item 3 comes from a tiny `#![no_std]` object that `bins()` compiles with the build's own `rustc` into `OUT_DIR` and hands to the linker for the bins. It needs no C compiler and adds no code or dependency to the consumer's crates.
 
-Code that runs before the guard: TLS callbacks (`.CRT$XL*`), which the loader calls before the CRT starts; the CRT's own start-up code and the initializers it registers in `.CRT$XIAA`; and the loader's resolution of the import table, which `/DEPENDENTLOADFLAG` (item 2) covers. A TLS callback that calls `LoadLibrary` without flags is not protected.
+Code that runs before the guard, where a `LoadLibrary` call without flags is not protected:
+
+- the executable's TLS callbacks (`.CRT$XL*`), which the loader calls before the CRT starts;
+- the `DllMain` (`DLL_PROCESS_ATTACH`) and TLS callbacks of every DLL the executable imports. The imports of those DLLs are covered by `/DEPENDENTLOADFLAG` (item 2); their flagless `LoadLibrary` calls are not;
+- the CRT's own start-up code, and every `.CRT$XI*` initializer that sorts at or before `.CRT$XIAB`: the CRT's `.CRT$XIAA` ones, and any object's `XIAA`, `XIA0` and the like;
+- the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 
 On targets that are not Windows, `bins()` does nothing: the loader searches the executable's folder only when the binary asks, and `verify` checks that it has not. Other Windows targets and Cygwin are refused: see Platform notes.
 

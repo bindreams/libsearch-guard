@@ -40,10 +40,17 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///   so a `LoadLibrary` call without flags, including one made inside a system DLL, searches System32 only.
 ///   The CRT runs that slot before every `.CRT$XC*` initializer (C++ constructors, `ctor`-style crates). If the
 ///   call fails, the process writes the error to stderr (to the debugger where there is no usable stderr) and
-///   terminates before `main`; a fast-fail trap follows the termination, so it never reaches `main` unhardened.
+///   terminates before `main`; a fast-fail trap (x86, x64, ARM64, ARM64EC and ARM32; an endless loop on any other
+///   architecture) follows the termination, so it never reaches `main` unhardened.
 ///
-/// What runs before that call: TLS callbacks (`.CRT$XL*`), the CRT's own start-up code and its `.CRT$XIAA`
-/// initializers, and the loader's resolution of the import table, which `/DEPENDENTLOADFLAG` covers.
+/// What runs before that call, so that a `LoadLibrary` call without flags made there is not protected:
+///
+/// - the executable's TLS callbacks (`.CRT$XL*`), which the loader calls before the CRT starts;
+/// - the `DllMain` (`DLL_PROCESS_ATTACH`) and TLS callbacks of every DLL the executable imports. The imports of
+///   those DLLs are covered by `/DEPENDENTLOADFLAG`; their flagless `LoadLibrary` calls are not;
+/// - the CRT's own start-up code, and every `.CRT$XI*` initializer that sorts at or before `.CRT$XIAB`: the CRT's
+///   `.CRT$XIAA` ones, and any object's `XIAA`, `XIA0` and the like;
+/// - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 ///
 /// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
 /// package's library, integration tests, examples and `cdylib`s are not affected. On a target that is not
