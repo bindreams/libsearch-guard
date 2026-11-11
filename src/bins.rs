@@ -151,7 +151,20 @@ fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Option<Initializer>, Stri
 fn compile_initializer(target: &str, rustc: &Path, initializer: &Initializer) {
     std::fs::write(&initializer.source, INITIALIZER)
         .unwrap_or_else(|e| panic!("libsearch-guard: cannot write {}: {e}", initializer.source));
-    let status = Command::new(rustc)
+    let status = initializer_command(rustc, target, "obj", &initializer.source, &initializer.object)
+        .status()
+        .unwrap_or_else(|e| panic!("libsearch-guard: cannot run {}: {e}", rustc.display()));
+    assert!(
+        status.success(),
+        "libsearch-guard: compiling libsearch-guard's initializer for {target} failed (rustc's error is above). A target with no prebuilt `core` (tier 3, -Zbuild-std) is not supported."
+    );
+}
+
+/// The `rustc` command line that compiles the initializer `source` for `target`, writing `output` in the `emit`
+/// form (`obj` for the link; the tests ask for `asm`). Every flag but `--emit` is the same for both.
+fn initializer_command(rustc: &Path, target: &str, emit: &str, source: &str, output: &str) -> Command {
+    let mut command = Command::new(rustc);
+    command
         .args([
             "--edition",
             "2021",
@@ -160,7 +173,8 @@ fn compile_initializer(target: &str, rustc: &Path, initializer: &Initializer) {
             "--crate-name",
             "libsearch_guard_pre_main",
         ])
-        .args(["--emit=obj", "--target", target])
+        .arg(format!("--emit={emit}"))
+        .args(["--target", target])
         .args([
             "-C",
             "panic=abort",
@@ -171,15 +185,8 @@ fn compile_initializer(target: &str, rustc: &Path, initializer: &Initializer) {
             "-C",
             "debuginfo=0",
         ])
-        .arg("-o")
-        .arg(&initializer.object)
-        .arg(&initializer.source)
-        .status()
-        .unwrap_or_else(|e| panic!("libsearch-guard: cannot run {}: {e}", rustc.display()));
-    assert!(
-        status.success(),
-        "libsearch-guard: compiling libsearch-guard's initializer for {target} failed (rustc's error is above). A target with no prebuilt `core` (tier 3, -Zbuild-std) is not supported."
-    );
+        .args(["-o", output, source]);
+    command
 }
 
 fn crt_static() -> bool {

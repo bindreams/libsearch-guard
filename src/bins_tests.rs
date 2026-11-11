@@ -1,7 +1,6 @@
-use super::{compile_initializer, hardens, plan, unicode, var_os};
+use super::{compile_initializer, hardens, initializer_command, plan, unicode, var_os};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[test]
 fn msvc_windows_is_hardened() {
@@ -118,22 +117,16 @@ fn initializer_assembly(target: &str) -> Option<String> {
     let source = dir.path().join("pre_main.rs");
     let assembly = dir.path().join("pre_main.s");
     std::fs::write(&source, super::INITIALIZER).unwrap();
-    let output = Command::new("rustc")
-        .args([
-            "--edition",
-            "2021",
-            "--crate-type",
-            "lib",
-            "--emit=asm",
-            "--target",
-            target,
-        ])
-        .args(["-C", "panic=abort", "-C", "opt-level=s", "-C", "codegen-units=1"])
-        .arg("-o")
-        .arg(&assembly)
-        .arg(&source)
-        .output()
-        .unwrap();
+    // The command line `bins()` compiles with, so the trap checked is the one that is linked: only `--emit` differs.
+    let output = initializer_command(
+        Path::new("rustc"),
+        target,
+        "asm",
+        source.to_str().unwrap(),
+        assembly.to_str().unwrap(),
+    )
+    .output()
+    .unwrap();
     assert!(
         output.status.success(),
         "cannot compile the initializer for {target}: install it with `rustup target add {target}`, or set LIBSEARCH_GUARD_SKIP_CROSS_TARGET_TESTS=1 to skip these tests:
@@ -162,4 +155,19 @@ fn the_initializer_ends_in_a_fast_fail_trap_on_every_architecture_that_has_one()
 {assembly}"
         );
     }
+}
+
+/// The object `bins()` links and the assembly the trap test reads come from one command line: only `--emit` differs.
+#[test]
+fn the_object_and_the_assembly_are_compiled_with_the_same_flags() {
+    let args = |emit| {
+        initializer_command(Path::new("rustc"), "x86_64-pc-windows-msvc", emit, "in.rs", "out")
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+    };
+    let (object, assembly) = (args("obj"), args("asm"));
+    let differing: Vec<_> = object.iter().zip(&assembly).filter(|(a, b)| a != b).collect();
+    assert_eq!(object.len(), assembly.len());
+    assert_eq!(differing, [(&"--emit=obj".to_owned(), &"--emit=asm".to_owned())]);
 }
