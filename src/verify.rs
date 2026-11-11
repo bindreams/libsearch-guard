@@ -101,6 +101,9 @@ impl std::error::Error for VerifyError {
 }
 
 /// Verifies the executable at `path`.
+///
+/// It checks a developer's own build output for an accidental opt-in to a search of the executable's folder; a
+/// binary crafted to deceive it (several `PT_DYNAMIC` segments, say) is out of scope.
 pub fn verify(path: impl AsRef<Path>) -> Result<(), VerifyError> {
     let bytes = std::fs::read(path).map_err(VerifyError::Io)?;
     verify_bytes(&bytes)

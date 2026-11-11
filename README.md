@@ -61,7 +61,7 @@ fn the_binary_is_hardened() {
 | ELF    | an RPATH or RUNPATH element that is `$ORIGIN`-based or relative (every element must be absolute); a `DT_NEEDED` that contains a `/` but does not start with one; a `PT_INTERP` that does not start with `/`                                                                                                   |
 | Mach-O | any `LC_RPATH`; a dylib load command that is `@executable_path`-, `@loader_path`- or `@rpath`-based or relative; an `LC_DYLD_ENVIRONMENT` that puts such a directory on a `DYLD_*_PATH` list (an empty element is not reported: dyld reads it as the root directory)                                          |
 
-ELF files are read through their `PT_DYNAMIC` segment, as the loader reads them, so a binary without section headers is checked too. A file it cannot read as one of these formats is an error, not a pass. Universal Mach-O binaries are checked slice by slice.
+ELF files are read through their `PT_DYNAMIC` segment, not the section headers, so a binary without section headers is checked too. `verify` checks a developer's own build output for an accidental opt-in; a binary crafted to deceive it is out of scope. A file it cannot read as one of these formats is an error, not a pass. Universal Mach-O binaries are checked slice by slice.
 
 ## Platform notes
 

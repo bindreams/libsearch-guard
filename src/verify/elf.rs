@@ -6,8 +6,8 @@
 //! name with a `/` in it is opened as a path, so it too must be absolute; one without is looked up on the
 //! search paths. The program interpreter (`PT_INTERP`) is always opened as a path.
 //!
-//! The dynamic entries are read through the `PT_DYNAMIC` segment, as the loader reads them, and not through
-//! the section headers, which a stripped or hand-linked binary may lack or falsify.
+//! The dynamic entries are read through the `PT_DYNAMIC` segment and not through the section headers, which a
+//! stripped or hand-linked binary may lack or falsify.
 
 use object::elf::{DynamicTag, DT_NEEDED, DT_NULL, DT_RPATH, DT_RUNPATH, DT_STRSZ, DT_STRTAB, PT_DYNAMIC, PT_LOAD};
 use object::read::elf::{Dyn, FileHeader, ProgramHeader};
