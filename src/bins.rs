@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -70,8 +71,12 @@ pub fn bins() {
         Ok(false) => return,
         Err(message) => panic!("libsearch-guard: {message}"),
     }
-    let object = compile_initializer(&var("TARGET"), Path::new(&var("OUT_DIR")), Path::new(&var("RUSTC")));
-    println!("cargo:rustc-link-arg-bins={}", object.display());
+    let object = compile_initializer(
+        &var("TARGET"),
+        Path::new(&var_os("OUT_DIR")),
+        Path::new(&var_os("RUSTC")),
+    );
+    println!("cargo:rustc-link-arg-bins={}", link_arg_path(&object));
     // `+crt-static` already links the whole CRT statically, the Universal CRT included. The arguments below
     // would turn that one back into a dynamic import.
     if !crt_static() {
@@ -146,12 +151,36 @@ fn compile_initializer(target: &str, out_dir: &Path, rustc: &Path) -> PathBuf {
 
 /// Whether the build links the C runtime statically (`-C target-feature=+crt-static`).
 fn crt_static() -> bool {
-    env::var("CARGO_CFG_TARGET_FEATURE")
-        .unwrap_or_default()
-        .split(',')
-        .any(|feature| feature == "crt-static")
+    env::var_os("CARGO_CFG_TARGET_FEATURE").is_some_and(|features| {
+        features
+            .to_string_lossy()
+            .split(',')
+            .any(|feature| feature == "crt-static")
+    })
+}
+
+/// A build-script environment variable, which cargo sets whatever its value: a path need not be Unicode.
+fn var_os(name: &str) -> OsString {
+    env::var_os(name).unwrap_or_else(|| panic!("libsearch-guard: {name} is not set; call `bins()` from a build script"))
+}
+
+/// `value`, the value of the variable `name`, as the text that `cargo:` lines and the Windows target names are.
+fn unicode(name: &str, value: OsString) -> String {
+    value
+        .into_string()
+        .unwrap_or_else(|value| panic!("libsearch-guard: {name} is not valid Unicode: {value:?}"))
 }
 
 fn var(name: &str) -> String {
-    env::var(name).unwrap_or_else(|_| panic!("libsearch-guard: {name} is not set; call `bins()` from a build script"))
+    unicode(name, var_os(name))
+}
+
+/// `path` as the text of a `cargo:rustc-link-arg` line, which cannot carry anything but Unicode.
+fn link_arg_path(path: &Path) -> &str {
+    path.to_str().unwrap_or_else(|| {
+        panic!(
+            "libsearch-guard: {} is not valid Unicode, and a link argument must be; use a target directory with a Unicode path",
+            path.display()
+        )
+    })
 }
