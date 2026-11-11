@@ -1,0 +1,567 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: publish-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+# Three jobs, so no credential shares a job with code that compiles:
+#
+#   resolve  reads the draft and the toolchain pin, and requires the draft's
+#            target to be on `main`. Compiles nothing. Its token is exposed as
+#            `GH_TOKEN` to two steps only (the draft lookup, where List
+#            releases returns drafts only to a writer, and the `main` check).
+#   build    compiles: the packaging verification build runs third-party
+#            build scripts and proc-macros. Read-only
+#            token, no environment, no OIDC, so a compromised dependency can
+#            neither mint the crates.io token nor push to the repo.
+#   publish  holds the Deploy environment and `id-token: write`. Compiles
+#            nothing: `cargo package --no-verify` and `cargo publish
+#            --no-verify` build no code, and the crates it uploads are
+#            re-derived here and checked against the build job's hashes.
+#
+# `publish` takes nothing from `build` except the sha256 list it holds its
+# re-derived archives to, so a compromised build job can cause a refusal, never
+# code execution or different bytes. Nor does `publish` run any action or
+# script from the release tree: it uses the dispatch commit's copy (the commit
+# this workflow file comes from), checked out beside the release tree. The
+# release tree is data there, except that `cargo` honours its
+# `.cargo/config.toml`: `cargo package --no-verify` runs `build.rustc` and
+# `build.rustc-wrapper` from it, and `cargo publish` runs a
+# `credential-provider` (`cargo metadata --no-deps` runs neither).
+#
+# Trust basis for that tree: `resolve` refuses a draft target that is not on
+# `main` at or after the floor pinned in require-target-on-main.sh. Every commit
+# there is a squash commit of a PR that passed required CI (the ruleset needs no
+# approving reviews, and a later-reverted commit stays eligible), so that config
+# has no more power than an edit to this workflow. This rests on the
+# default-branch ruleset (linear history, squash-only merges, no force-push or
+# deletion, no bypass actors) and on the default branch being `main`. The
+# Deploy environment's branch policy is separate: it restricts only the ref this
+# workflow is dispatched from.
+#
+# `actions/checkout` uses `github.token` in every job (its default `token`
+# input); with `persist-credentials: false` it leaves nothing in `.git/config`.
+jobs:
+  resolve:
+    name: Resolve the draft release
+    runs-on: ubuntu-latest
+    permissions:
+      # `write` is required (not just `read`) so the List releases API
+      # returns drafts: per GitHub docs, drafts are only returned "if the
+      # user has push access", which means write-level auth.
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      rust_version: ${{ steps.toolchain.outputs.version }}
+    steps:
+      # The release tree can't be checked out until the draft's target SHA is
+      # known, and that lookup needs the validated version; so the scripts and
+      # actions used here come from the dispatch commit.
+      - name: Check out the release scripts from the workflow ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions
+          path: workflow-ref
+          persist-credentials: false
+
+      - name: Normalize and validate version
+        id: version
+        timeout-minutes: 5
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Validation, and its rationale (leading-`v` and leading-zero
+          # rejection), live in normalize-version.sh — shared with
+          # draft-release.yaml so both copies stay identical.
+          V=$(workflow-ref/.github/scripts/normalize-version.sh "$INPUT_VERSION")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v${V}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify draft release exists and resolve commit SHA
+        id: release
+        # Every step ahead of the upload is bounded, so a hung run cannot sit on
+        # the concurrency group until GitHub's 6-hour cap. The upload itself and
+        # the draft flip are deliberately unbounded: see the note on the
+        # publish job.
+        timeout-minutes: 5
+        env:
+          # One of two steps in this job that call `gh` (the other is the
+          # main-ancestry check below), so the only ones given the token as
+          # `GH_TOKEN`.
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! RELEASE_JSON=$(gh release view "$TAG" --json isDraft,targetCommitish); then
+            echo "::error::gh release view failed for $TAG. Does the draft release exist?"
+            exit 1
+          fi
+
+          IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.isDraft')
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "::error::Release $TAG is already published"
+            exit 1
+          fi
+
+          TARGET=$(echo "$RELEASE_JSON" | jq -r '.targetCommitish')
+          if ! [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Draft release target '$TARGET' is not a 40-char commit SHA. Recreate the draft via the Draft Release workflow."
+            exit 1
+          fi
+          echo "commit_sha=$TARGET" >> "$GITHUB_OUTPUT"
+
+          # A step *output* is not visible anywhere in the log or the UI, only
+          # to later steps/jobs — so an operator reading this run to recover
+          # manually has nowhere to find $TARGET unless it is also printed
+          # here. Both the log and the summary, same reasoning as the
+          # RELEASE COMPLETE marker below: a summary write failure must not
+          # hide the one value manual recovery needs.
+          echo "Resolved $TAG -> $TARGET" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Nothing from the release tree is checked out or run until this passes.
+      - name: Require the draft's target to be on main
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ steps.release.outputs.commit_sha }}
+        shell: bash
+        run: workflow-ref/.github/scripts/require-target-on-main.sh
+
+      # The toolchain is pinned in the release tree, so a re-run of the same
+      # draft installs the same cargo (archives differ between cargo versions)
+      # and a new stable cannot change them. Read from the draft's target, not
+      # the dispatch commit.
+      - name: Check out the toolchain pin from the draft's target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 5
+        with:
+          ref: ${{ steps.release.outputs.commit_sha }}
+          sparse-checkout: .github
+          path: release-pin
+          persist-credentials: false
+
+      # The script beside the action comes from the dispatch commit; the
+      # file it reads from the draft's target.
+      - name: Read and validate the toolchain pin
+        id: toolchain
+        timeout-minutes: 5
+        uses: ./workflow-ref/.github/actions/read-toolchain-pin
+        with:
+          file: release-pin/.github/release-toolchain
+
+  build:
+    name: Verify build
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The draft's target, not the dispatch commit. No credentials are left in
+      # `.git/config`: everything below runs third-party build code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 10
+        with:
+          ref: ${{ needs.resolve.outputs.commit_sha }}
+          persist-credentials: false
+
+      # The pinned toolchain, not `stable`: the publish job re-derives these
+      # archives with the same cargo, and cargo versions can produce different
+      # bytes. sccache does not enter into it: the `.crate` files are built
+      # from source and never contain compiler output.
+      - uses: ./.github/actions/setup-rust
+        timeout-minutes: 15
+        with:
+          toolchain: ${{ needs.resolve.outputs.rust_version }}
+
+      # The verification build runs here, before the token exists. `cargo
+      # publish` would otherwise do it inside the credential's ~30-minute
+      # window, and a cold cache can consume most of that.
+      #
+      # The member list is built explicitly rather than using `--workspace`,
+      # which packages `publish = false` members too (the test fixtures here).
+      # That is a superset of what is uploaded: it enforces packaging rules on
+      # crates that are never packaged — an unversioned path dependency is legal in a
+      # `publish = false` member and fails `cargo package`, so stage 1 would
+      # pass and this step would fail after the draft exists.
+      - name: Package and verify the publishable members
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          members=$(.github/scripts/publishable-members.sh)
+          args=()
+          while read -r c; do
+            [ -n "$c" ] || continue
+            args+=(-p "$c")
+          done <<< "$members"
+          cargo package --locked "${args[@]}"
+
+      # `target/package` also holds the unpacked verification trees, so copy
+      # out just the archives. The hashes go in their own small artifact: the
+      # credentialed job downloads only that one.
+      - name: Write the sha256 manifest
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/crates" "$RUNNER_TEMP/sha256sums"
+          cp target/package/*.crate "$RUNNER_TEMP/crates/"
+          (cd "$RUNNER_TEMP/crates" && sha256sum -- *.crate > ../sha256sums/SHA256SUMS)
+          cat "$RUNNER_TEMP/sha256sums/SHA256SUMS"
+
+      # For forensics only: nothing downstream reads these.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        timeout-minutes: 5
+        with:
+          name: crates
+          path: ${{ runner.temp }}/crates
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        timeout-minutes: 5
+        with:
+          name: sha256sums
+          path: ${{ runner.temp }}/sha256sums
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    # Deliberately no *job-level* `timeout-minutes` — the steps before the
+    # upload carry their own instead. A job deadline spans the publish step,
+    # and crates.io commits each upload server-side, so cancelling part-way
+    # through leaves the crate published with no tag: the state
+    # the timeout would exist to avoid, caused by the timeout.
+    #
+    # Two deadlines remain that no timeout setting here can remove: the minted
+    # token lives ~30 minutes, and GitHub caps any job at 6 hours. Both span
+    # the upload. What keeps them from mattering is the job order — the
+    # verification build ran in the build job, so only the uploads themselves
+    # race the credential. Should one still expire mid-upload, the run stops
+    # without the RELEASE COMPLETE marker, and CONTRIBUTING.md's recovery
+    # section covers that state.
+    #
+    # The Deploy environment is named in each crate's crates.io trusted-publisher
+    # config, so the OIDC token minted below is only accepted from a run that
+    # declares it.
+    #
+    # Its deployment branch policy allows only `main`, so a run dispatched on any
+    # other ref cannot run this job. It has no reviewer rule. See CONTRIBUTING.md.
+    # The trust basis for the published tree is in the header.
+    #
+    # Real preflight (version validation, CI matrix, cargo publish dry-run)
+    # happens in draft-release.yaml before a draft can exist. This workflow
+    # assumes the operator has already reviewed the draft and is committing
+    # to publishing — so we don't duplicate preflight here.
+    #
+    # This job must compile nothing: no `cargo build`, `cargo test`, `cargo
+    # run`, no verifying `cargo package`/`cargo publish`. Put
+    # such steps in the build job.
+    environment: Deploy
+    permissions:
+      # The draft flip (`gh release edit`) needs write access.
+      contents: write
+      # Lets the runner mint the OIDC JWT that crates.io exchanges for a
+      # short-lived publish token. Both scopes must be listed: declaring any
+      # `permissions:` block sets every unlisted scope to `none`.
+      id-token: write
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+    defaults:
+      run:
+        working-directory: release
+    steps:
+      # Actions and scripts come from the dispatch commit, which this workflow
+      # file is from, never from the release tree that `cargo` reads. The
+      # scripts run from `../workflow-ref/`, on the release tree as the
+      # working directory. Both trees sit in subdirectories: the release tree
+      # in `release/`, where this job's own `run:` steps start (composite
+      # actions' steps do not; the toolchain pin does not depend on the
+      # directory), so it holds no stray untracked files for `cargo package` to
+      # reject.
+      - name: Check out the actions from the workflow ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 5
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          path: workflow-ref
+          persist-credentials: false
+
+      # Same commit the build job built. `persist-credentials: false` keeps the
+      # write token out of `.git/config`; the flip step gets it explicitly.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 10
+        with:
+          ref: ${{ needs.resolve.outputs.commit_sha }}
+          path: release
+          persist-credentials: false
+
+      # Not `setup-rust`: that adds a compiler cache wrapper this job never
+      # uses. The version comes from `resolve`, never from `build`.
+      - uses: ./workflow-ref/.github/actions/install-toolchain
+        timeout-minutes: 15
+        with:
+          toolchain: ${{ needs.resolve.outputs.rust_version }}
+
+      # Only the hashes, not the archives: the build job controls this
+      # artifact, so the credentialed job unpacks as little of it as it can.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        timeout-minutes: 5
+        with:
+          name: sha256sums
+          path: ${{ runner.temp }}/built
+
+      # Builds nothing, so it also reads no third-party code: `cargo metadata
+      # --no-deps` only parses the manifests.
+      - name: Re-verify the manifest version matches the release
+        timeout-minutes: 5
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tie the input to the manifest: the tag this run publishes under is
+          # the input, and the version cargo uploads is the manifest's.
+          #
+          # Stage 1 gates this, but stage 1's verdict is only transitive — it
+          # applies to the commit the draft recorded, and this job already
+          # treats the draft's target as mutable (which is why the flip below
+          # re-asserts the SHA). Re-assert the version against the tree that is
+          # actually about to be uploaded; this is the irreversible stage.
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          versions=$(printf '%s' "$metadata" | jq -r '.packages[] | select(.publish != []) | .version' | sort -u)
+          version_count=$(printf '%s\n' "$versions" | wc -l)
+          if [ "$version_count" -ne 1 ]; then
+            # One publishable member is expected, so this means a second was
+            # added. Publishing several needs the lockstep-version and ordering
+            # handling this pipeline does not have.
+            version_list=$(printf '%s' "$versions" | tr '\n' ' ')
+            echo "::error::Publishable members have different versions (${version_list}). This pipeline publishes one crate; see CONTRIBUTING.md."
+            exit 1
+          fi
+          if [ "$versions" != "$VERSION" ]; then
+            echo "::error::The commit this release points at has manifest version ${versions}, but this run is publishing ${VERSION}. cargo would upload ${versions} under the tag ${TAG}. Recreate the draft from a commit whose manifests say ${VERSION}."
+            exit 1
+          fi
+
+      # Re-derive the archives from the source tree and compare them to what
+      # the build job verified. `--no-verify` skips the compile, so no build
+      # script or proc-macro runs, and the bytes come from source, not from the
+      # artifact. (`.cargo/config.toml` programs still run; see the header.) The
+      # artifact only carries the hashes to hold them to. Any difference fails
+      # closed: the tree that was built is not the tree about to be uploaded.
+      - name: Re-derive the packages and check them against the build job
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          built="$RUNNER_TEMP/built"
+          members=$(../workflow-ref/.github/scripts/publishable-members.sh)
+          args=()
+          expected=0
+          while read -r c; do
+            [ -n "$c" ] || continue
+            args+=(-p "$c")
+            expected=$((expected + 1))
+          done <<< "$members"
+          cargo package --no-verify --locked "${args[@]}"
+
+          listed=$(wc -l < "$built/SHA256SUMS")
+          if [ "$listed" -ne "$expected" ]; then
+            echo "::error::The build job's manifest lists ${listed} crates but ${expected} members are publishable. Refusing to publish."
+            exit 1
+          fi
+          for c in $members; do
+            file="${c}-${VERSION}.crate"
+            want=$(awk -v f="$file" '$2 == f { print $1 }' "$built/SHA256SUMS")
+            if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::The build job's manifest has no valid sha256 for ${file}. Refusing to publish."
+              exit 1
+            fi
+            path="target/package/$file"
+            if [ ! -f "$path" ]; then
+              echo "::error::${path} does not exist. Refusing to publish."
+              exit 1
+            fi
+            got=$(sha256sum "$path" | cut -d ' ' -f1)
+            if [ "$got" != "$want" ]; then
+              echo "::error::${path} hashes to ${got}, but the build job verified ${want} for ${file}. The uploaded tree is not the built tree. Refusing to publish; see Recovery in CONTRIBUTING.md."
+              exit 1
+            fi
+          done
+
+      # Idempotency guard: makes a run that failed or was cancelled after this
+      # point safe to re-dispatch at the same version. `cargo publish` is not
+      # itself idempotent: re-uploading a published version errors, so without
+      # this a run that failed after the upload could only be finished by hand
+      # (see Recovery in CONTRIBUTING.md).
+      #
+      # Uses `crate-state.sh` (crates.io JSON API, not the sparse index — see
+      # its header), which sidesteps the index's 600s CDN cache. That is not
+      # a read-after-write guarantee from the API itself, which crates.io
+      # does not document — see Recovery in CONTRIBUTING.md for what to do
+      # if a read looks stale right after an upload. Every branch here still
+      # fails closed: a wrong "absent" would re-upload a live member, a wrong
+      # "published" would skip one that never went out.
+      - name: Classify crates.io state for every publishable member
+        id: crate_state
+        timeout-minutes: 10
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # `$(...)` in a plain assignment, not inside a `[` test — `set -e`
+          # aborts on that, which is what makes publishable-members.sh's own
+          # fail-closed refusal fatal here instead of an empty member list.
+          members=$(../workflow-ref/.github/scripts/publishable-members.sh)
+
+          already=""
+          pending=""
+          total=0
+          for c in $members; do
+            total=$((total + 1))
+            state=$(../workflow-ref/.github/scripts/crate-state.sh "$c" "$VERSION")
+            kind=${state%% *}
+            case "$kind" in
+              never-published)
+                # Stage 1's verify job already refuses to create a draft for
+                # any member in this state, so reaching stage 2 with one
+                # should be unreachable — surface it as its own case rather
+                # than falling into "Unrecognized state" below, since the fix
+                # (there is a trusted-publisher config missing, not a build
+                # or registry problem) is different from either of those.
+                echo "::error::$c has never been published on crates.io. Stage 2 authenticates by trusted publishing, and a crate that does not exist cannot have a publisher configured. Follow \"Adding a publishable member\" in CONTRIBUTING.md, then re-run stage 1 before stage 2."
+                exit 1
+                ;;
+              published)
+                # A "published" verdict only proves *some* build occupies this
+                # version slot, not that it is the one this run just packaged.
+                # A re-dispatch racing an unrelated publish (or a bug in this
+                # very check) must not treat a different tree's upload as its
+                # own and silently finish the release around it — compare
+                # crates.io's own checksum for this version against the
+                # sha256 of this run's packaged .crate, from the re-derived
+                # package above, and refuse rather than skip on a mismatch. That
+                # refusal also blocks the GitHub-release flip below, since it
+                # aborts this step and no later step runs.
+                checksum=${state#* }
+                crate_file="target/package/${c}-${VERSION}.crate"
+                if [ ! -f "$crate_file" ]; then
+                  echo "::error::$c ${VERSION} reads published on crates.io, but the re-derive step above did not produce ${crate_file} — cannot verify this run built what's already live. Refusing to continue."
+                  exit 1
+                fi
+                actual=$(sha256sum "$crate_file" | cut -d ' ' -f1)
+                if [ "$actual" != "$checksum" ]; then
+                  echo "::error::$c ${VERSION} is published on crates.io with checksum ${checksum}, but this run's packaged crate hashes to ${actual} — this run did not build what's already published at this version. Refusing to finish the release; see Recovery in CONTRIBUTING.md."
+                  exit 1
+                fi
+                already="$already $c"
+                ;;
+              absent) pending="$pending $c" ;;
+              yanked)
+                echo "::error::$c ${VERSION} is published but YANKED — that version slot is spent for good."
+                echo "::error::Re-running cannot fix this. Follow the Recovery section (abandon-and-bump path) in CONTRIBUTING.md."
+                exit 1
+                ;;
+              *)
+                echo "::error::Unrecognized state '$state' for $c — refusing to continue."
+                exit 1
+                ;;
+            esac
+          done
+
+          already="${already# }"
+          pending="${pending# }"
+          echo "already_published=$already" >> "$GITHUB_OUTPUT"
+          if [ -z "$pending" ]; then
+            echo "all_published=true" >> "$GITHUB_OUTPUT"
+            echo "All $total publishable members are already at ${VERSION}, verified as this run's own build; finishing the release without publishing again."
+          else
+            echo "all_published=false" >> "$GITHUB_OUTPUT"
+            echo "Already at ${VERSION} (verified as this run's own build): ${already:-none}. Publishing the rest: ${pending}."
+          fi
+
+      - name: Mint a short-lived crates.io token by OIDC
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
+        id: auth
+        if: steps.crate_state.outputs.all_published != 'true'
+        timeout-minutes: 5
+
+      - name: Publish to crates.io
+        if: steps.crate_state.outputs.all_published != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        # A crate this run already published is skipped (the guard step above
+        # verified it as this run's own build), so a re-dispatch only publishes
+        # what is missing.
+        #
+        # `--no-verify` because the build job already ran the verification
+        # build, on this commit and over the whole member set, and this job
+        # compiles nothing. It skips only that local build; registry-side
+        # limits such as crates.io's upload size cap still apply at upload, and
+        # nothing before this step exercises them.
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--package libsearch-guard --locked --no-verify)
+          if ! cargo publish "${args[@]}"; then
+            echo "::error::cargo publish failed. See Recovery in CONTRIBUTING.md."
+            exit 1
+          fi
+
+      # No `if:` — this runs even when the guard step above found every member
+      # already published, so a re-dispatch that only needs to finish the flip
+      # (see Recovery in CONTRIBUTING.md) still completes the release.
+      - name: Publish GitHub release
+        env:
+          # The only step in this job that calls `gh`, so the only one given
+          # the token as `GH_TOKEN`.
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Re-assert the target. The flip is what creates the tag, and it uses
+          # the release's target as it stands *now* — an edit to the draft
+          # between the earlier resolution and this point would otherwise tag a
+          # commit nobody verified. Pin it to the SHA this run actually built.
+          gh release edit "$TAG" --draft=false --target "$COMMIT_SHA"
+
+          # Completion marker, to both the log and the summary: the operator is
+          # told to read the log, and the summary is what a reader sees first.
+          #
+          # `crates-io-auth-action` revokes its minted token in a post step, and
+          # fails the job if that revoke fails — post steps run after every
+          # regular step, so after this one. A red run carrying this marker is a
+          # finished release: take no action.
+          echo "RELEASE COMPLETE: $TAG published to crates.io and GitHub — https://github.com/${REPO}/releases/tag/$TAG. If this run is red, the failure came after this point and the release is done." \
+            | tee -a "$GITHUB_STEP_SUMMARY"

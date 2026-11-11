@@ -1,0 +1,263 @@
+name: Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: draft-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Advisory: it runs from the dispatched ref's own tree, so a ref without
+      # this step skips it, and stage 2's `resolve` is the only enforcing gate.
+      # It fails early, before anyone reviews a draft stage 2 would refuse.
+      - name: Require the commit being drafted to be on main
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ github.sha }}
+        shell: bash
+        run: .github/scripts/require-target-on-main.sh
+
+      # Stage 2's toolchain: a missing or malformed pin fails here, before any
+      # draft exists.
+      - uses: ./.github/actions/setup-rust
+        with:
+          pin-file: .github/release-toolchain
+
+      - name: Normalize and validate version
+        id: version
+        timeout-minutes: 5
+        # inputs.version is passed via env to avoid shell injection on
+        # interpolation. GitHub's actionlint specifically flags direct
+        # ${{ inputs.* }} interpolation in run: blocks.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Validation, and its rationale (leading-`v` and leading-zero
+          # rejection), live in normalize-version.sh — shared with
+          # publish-release.yaml so both copies stay identical.
+          V=$(.github/scripts/normalize-version.sh "$INPUT_VERSION")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: CI
+    needs: validate
+    # Re-run the full CI matrix (lint + 5-platform test) against the release
+    # commit. Main's last green CI does not imply THIS commit is green — it
+    # might be behind main, and pushes to main between CI runs may have
+    # landed broken. Stage 1 is the last reversible gate before publish.
+    uses: ./.github/workflows/ci.yaml
+
+  verify:
+    name: Verify publishable
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Stage 2's toolchain: a missing or malformed pin fails here, before any
+      # draft exists.
+      - uses: ./.github/actions/setup-rust
+        with:
+          pin-file: .github/release-toolchain
+
+      - name: Dry-run publish
+        timeout-minutes: 30
+        # Verification stays on, so stage 1 rehearses stage 2: it compiles the
+        # crate as packaged rather than as checked out, under the same pinned
+        # toolchain.
+        run: cargo publish --package libsearch-guard --dry-run --locked
+
+      # Two questions must be settled before a draft can exist, and the
+      # dry-run above answers neither.
+      #
+      # A crate that does not yet exist on crates.io cannot have a trusted
+      # publisher configured, so stage 2 cannot publish a new member at all —
+      # and a leaf publishes after its dependencies, landing the worst partial
+      # state. See "Adding a publishable member" in CONTRIBUTING.md.
+      #
+      # A version already on crates.io can never be published again: the
+      # registry reserves it permanently and yanking does not free it.
+      # `cargo publish --dry-run` warns "already exists on crates.io" and still
+      # exits 0, so without this check a re-dispatch of a published version
+      # passes stage 1 and fails part-way through the irreversible upload.
+      #
+      # Uses `crate-state.sh` (crates.io JSON API, not the sparse index — see
+      # its header), which sidesteps the index's 600s CDN cache. That is not
+      # the same as a read-after-write guarantee from the API itself, which
+      # crates.io does not document — see Recovery in CONTRIBUTING.md for
+      # what to do if a read looks stale right after an upload. This step
+      # fails closed on any ambiguous response instead of guessing either way.
+      - name: Check crates.io state for every publishable member
+        timeout-minutes: 10
+        env:
+          INPUT_VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Read the member list into a variable rather than feeding a loop from
+          # a process substitution: `< <(cargo metadata | jq)` discards the exit
+          # status of both commands, so a failure there would run the loop zero
+          # times and report every member as fine — this gate failing open in
+          # the stage that exists to catch exactly that.
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          members=$(.github/scripts/publishable-members.sh)
+
+          # The version that gets uploaded is the manifest's, not the operator's
+          # input, and the two can differ. Checking the input alone would clear
+          # a version nobody is publishing while the one cargo actually uploads
+          # goes unchecked.
+          versions=$(printf '%s' "$metadata" | jq -r '.packages[] | select(.publish != []) | .version' | sort -u)
+          version_count=$(printf '%s\n' "$versions" | wc -l)
+          if [ "$version_count" -ne 1 ]; then
+            # One publishable member is expected, so this means a second was
+            # added. Publishing several needs the lockstep-version and ordering
+            # handling this pipeline does not have.
+            version_list=$(printf '%s' "$versions" | tr '\n' ' ')
+            echo "::error::Publishable members have different versions (${version_list}). This pipeline publishes one crate; see CONTRIBUTING.md."
+            exit 1
+          fi
+          VERSION="$versions"
+          if [ "$VERSION" != "$INPUT_VERSION" ]; then
+            echo "::error::Input version ${INPUT_VERSION} does not match the manifest version ${VERSION}; cargo would publish ${VERSION}. Bump the manifests, or re-dispatch with ${VERSION}."
+            exit 1
+          fi
+
+          new=()
+          taken=()
+          yanked=()
+          while read -r c; do
+            [ -n "$c" ] || continue
+
+            # never-published means stage 2 could never publish this member at all
+            # (see "Adding a publishable member" in CONTRIBUTING.md); published and
+            # yanked both mean crates.io permanently reserved this version on first
+            # upload (crate-state.sh's header covers why one request tells us both).
+            #
+            # `state=$(...)` as a plain assignment, not inside a `[` test —
+            # `set -e` sees a failing command substitution there and aborts,
+            # which is what makes crate-state.sh's own refusals fatal here
+            # instead of silently read as "absent".
+            state=$(.github/scripts/crate-state.sh "$c" "$VERSION")
+            kind=${state%% *}
+            case "$kind" in
+              never-published) new+=("$c") ;;
+              absent) ;;
+              published) taken+=("$c") ;;
+              yanked)
+                taken+=("$c")
+                yanked+=("$c")
+                ;;
+              *)
+                echo "::error::Unrecognized state '$state' for $c ${VERSION} — refusing to continue."
+                exit 1
+                ;;
+            esac
+          done <<< "$members"
+
+          # Report every problem in one run rather than one per re-dispatch.
+          fail=0
+          if [ ${#new[@]} -ne 0 ]; then
+            echo "::error::Never published: ${new[*]}. Stage 2 authenticates by trusted publishing, and a crate that does not exist cannot have a publisher configured. Follow \"Adding a publishable member\" in CONTRIBUTING.md, then re-run."
+            fail=1
+          fi
+          if [ ${#taken[@]} -ne 0 ]; then
+            echo "::error::crates.io already has ${VERSION} for: ${taken[*]}. That version is reserved permanently and can never be republished. Bump and re-run."
+            fail=1
+          fi
+          if [ ${#yanked[@]} -ne 0 ]; then
+            echo "::error::Of those, ${yanked[*]} are specifically YANKED at ${VERSION} — that slot is spent for good."
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+
+          echo "All publishable members exist, and none has ${VERSION} yet."
+
+  release:
+    name: Create draft release
+    needs: [validate, ci, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # There is no check-then-create here: GitHub does not reject a second
+      # release (draft or published) with a `tag_name` that's already in
+      # use by another release, so a pre-check step can only ever narrow the
+      # race, never close it — between "confirmed not there" and "created"
+      # a concurrent run can still create the duplicate this step meant to
+      # catch. Creating first and then verifying, below, closes it instead:
+      # the check runs against the state that includes this run's own
+      # write, so "is this the only release with this tag" is a question
+      # this job can actually answer for certain, and clean up after itself
+      # if the answer is no.
+      #
+      # `gh release create` does not hand back the created release's id in
+      # a scriptable form, and the verify step below needs one to delete
+      # *this run's own* draft specifically (not just any release with this
+      # tag) if it turns out not to be alone. `gh api -X POST` gives the
+      # full JSON response `gh release create` would otherwise discard.
+      - name: Create draft release pinned to commit SHA
+        id: release
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          release_json=$(gh api "repos/${GH_REPO}/releases" -X POST \
+            -f "tag_name=${TAG}" \
+            -f "target_commitish=${SHA}" \
+            -f "name=${TAG}" \
+            -F draft=true \
+            -F generate_release_notes=true)
+          id=$(printf '%s' "$release_json" | jq -er '.id') || {
+            echo "::error::Created a draft release for $TAG but could not read its id back from GitHub's response, so the next step cannot verify it's the only release with this tag or clean it up if it isn't. Check https://github.com/${GH_REPO}/releases by hand before re-running."
+            exit 1
+          }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "Draft release created for commit $SHA:"
+          echo "  https://github.com/${GH_REPO}/releases/tag/${TAG}"
+
+      - name: Fail if this is not the only release with this tag
+        # Above the script's own 240s wait for the listing to show our draft.
+        timeout-minutes: 8
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/verify-sole-release.sh
