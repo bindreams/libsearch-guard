@@ -53,6 +53,47 @@ fn flags_that_search_the_executables_folder_are_reported_even_with_system32() {
     }
 }
 
+/// Only 0x800 and 0x400 are allowed: a bit the loader does not document for `DependentLoadFlags`, or one that
+/// changes how the DLL is loaded, is reported with the bit named.
+#[test]
+fn a_flag_bit_outside_the_allowlist_is_reported_and_named() {
+    for (flags, bit) in [
+        (0x808u16, "0x8"),
+        (0x2800, "0x2000"),
+        (0x900, "0x100"),
+        (0x801, "0x1"),
+        (0x8800, "0x8000"),
+    ] {
+        let image = pe(&Pe {
+            imports: &["KERNEL32.dll"],
+            delay_imports: &[],
+            load_config: Some((flags, FULL)),
+        });
+        let Err(VerifyError::Violations(violations)) = verify_bytes(&image) else {
+            panic!("{flags:#x} passed");
+        };
+        assert_eq!(violations.len(), 1, "{flags:#x}: {violations:?}");
+        assert_eq!(violations[0].kind, ViolationKind::PeDependentLoadFlags);
+        assert!(
+            violations[0].detail.contains(&format!("bit {bit}")),
+            "{flags:#x}: {}",
+            violations[0].detail
+        );
+    }
+}
+
+#[test]
+fn system32_with_the_user_dirs_is_the_only_extra_that_passes() {
+    for flags in [0x800, 0xC00] {
+        let image = pe(&Pe {
+            imports: &["KERNEL32.dll"],
+            delay_imports: &[],
+            load_config: Some((flags, FULL)),
+        });
+        assert_eq!(kinds(&image), vec![], "{flags:#x}");
+    }
+}
+
 #[test]
 fn flags_without_system32_are_reported() {
     let image = pe(&Pe {
