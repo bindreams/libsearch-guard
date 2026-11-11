@@ -2,7 +2,7 @@
 
 use super::put;
 
-/// What a crafted PE32+ image should contain.
+/// What a crafted PE32+ ([`pe`]) or PE32 ([`pe32`]) image should contain.
 pub struct Pe<'a> {
     pub imports: &'a [&'a str],
     /// DLLs in the delay-load import directory.
@@ -12,11 +12,36 @@ pub struct Pe<'a> {
     pub load_config: Option<(u16, u32)>,
 }
 
+/// A 64-bit image: PE32+, x86-64.
 pub fn pe(spec: &Pe) -> Vec<u8> {
-    use object::pe::ImageLoadConfigDirectory64;
+    pe_image(spec, Bits::B64)
+}
+
+/// A 32-bit image: PE32, x86.
+pub fn pe32(spec: &Pe) -> Vec<u8> {
+    pe_image(spec, Bits::B32)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Bits {
+    B32,
+    B64,
+}
+
+/// Where `DependentLoadFlags` is in the load config directory, from the `IMAGE_LOAD_CONFIG_DIRECTORY` layouts in
+/// winnt.h: after `CSDVersion`, at 54 in the 32-bit directory and 78 in the 64-bit one. Written out, and not
+/// taken from the `object` crate, so a wrong offset there fails a test.
+fn dependent_load_flags_at(bits: Bits) -> usize {
+    match bits {
+        Bits::B32 => 0x36,
+        Bits::B64 => 0x4e,
+    }
+}
+
+fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
     const SECTION_RVA: u32 = 0x1000;
     const SECTION_FILE: usize = 0x200;
-    let full_size = size_of::<ImageLoadConfigDirectory64>();
+    let thunk_size = if bits == Bits::B64 { 8 } else { 4 };
 
     // Section contents, laid out at increasing offsets from SECTION_RVA.
     let mut sec: Vec<u8> = Vec::new();
@@ -32,8 +57,8 @@ pub fn pe(spec: &Pe) -> Vec<u8> {
         sec.extend_from_slice(&[0, 0, b'f', 0]); // hint 0, name "f"
         sec.resize(sec.len().next_multiple_of(8), 0);
         let thunk_rva = SECTION_RVA + sec.len() as u32;
-        sec.extend_from_slice(&(hint_rva as u64).to_le_bytes());
-        sec.extend_from_slice(&0u64.to_le_bytes());
+        sec.extend_from_slice(&(hint_rva as u64).to_le_bytes()[..thunk_size]);
+        sec.extend_from_slice(&[0u8; 8][..thunk_size]);
         descriptors.push((thunk_rva, name_rva));
     }
     for (i, (thunk_rva, name_rva)) in descriptors.iter().enumerate() {
@@ -70,9 +95,9 @@ pub fn pe(spec: &Pe) -> Vec<u8> {
     if let Some((flags, size)) = spec.load_config {
         sec.resize(sec.len().next_multiple_of(8), 0);
         let at = sec.len();
-        let mut config = vec![0u8; full_size];
+        let mut config = vec![0u8; (size as usize).max(dependent_load_flags_at(bits) + 2)];
         config[..4].copy_from_slice(&size.to_le_bytes());
-        let flags_at = std::mem::offset_of!(ImageLoadConfigDirectory64, dependent_load_flags);
+        let flags_at = dependent_load_flags_at(bits);
         config[flags_at..flags_at + 2].copy_from_slice(&flags.to_le_bytes());
         config.truncate(size as usize);
         sec.extend_from_slice(&config);
@@ -86,24 +111,35 @@ pub fn pe(spec: &Pe) -> Vec<u8> {
     img[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     img.extend_from_slice(b"PE\0\0");
     // COFF header.
-    img.extend_from_slice(&0x8664u16.to_le_bytes()); // x86-64
+    let (machine, optional_size, characteristics) = match bits {
+        Bits::B64 => (0x8664u16, 240u16, 0x0022u16), // x86-64; executable, large-address-aware
+        Bits::B32 => (0x014cu16, 224u16, 0x0102u16), // x86; executable, 32-bit machine
+    };
+    img.extend_from_slice(&machine.to_le_bytes());
     img.extend_from_slice(&1u16.to_le_bytes()); // one section
     img.extend_from_slice(&[0u8; 12]); // timestamp, symbol table, symbol count
-    img.extend_from_slice(&240u16.to_le_bytes()); // optional header size
-    img.extend_from_slice(&0x0022u16.to_le_bytes()); // executable, large-address-aware
-                                                     // Optional header (PE32+).
-    let mut opt = vec![0u8; 240];
-    opt[..2].copy_from_slice(&0x20bu16.to_le_bytes());
-    opt[24..32].copy_from_slice(&0x1_4000_0000u64.to_le_bytes()); // ImageBase
+    img.extend_from_slice(&optional_size.to_le_bytes());
+    img.extend_from_slice(&characteristics.to_le_bytes());
+    // Optional header. PE32 has no 64-bit `ImageBase` and has `BaseOfData`, so what follows it moves by 4.
+    let mut opt = vec![0u8; optional_size as usize];
+    let (magic, data_dirs_at) = match bits {
+        Bits::B64 => (0x20bu16, 112),
+        Bits::B32 => (0x10bu16, 96),
+    };
+    opt[..2].copy_from_slice(&magic.to_le_bytes());
+    match bits {
+        Bits::B64 => opt[24..32].copy_from_slice(&0x1_4000_0000u64.to_le_bytes()), // ImageBase
+        Bits::B32 => opt[28..32].copy_from_slice(&0x40_0000u32.to_le_bytes()),
+    }
     opt[32..36].copy_from_slice(&0x1000u32.to_le_bytes()); // SectionAlignment
     opt[36..40].copy_from_slice(&0x200u32.to_le_bytes()); // FileAlignment
     opt[56..60].copy_from_slice(&(SECTION_RVA + section_size as u32).to_le_bytes()); // SizeOfImage
     opt[60..64].copy_from_slice(&0x200u32.to_le_bytes()); // SizeOfHeaders
     opt[68..70].copy_from_slice(&3u16.to_le_bytes()); // console subsystem
-    opt[108..112].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
+    opt[data_dirs_at - 4..data_dirs_at].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
     let dir = |opt: &mut [u8], index: usize, (rva, size): (u32, u32)| {
-        opt[112 + index * 8..116 + index * 8].copy_from_slice(&rva.to_le_bytes());
-        opt[116 + index * 8..120 + index * 8].copy_from_slice(&size.to_le_bytes());
+        opt[data_dirs_at + index * 8..data_dirs_at + index * 8 + 4].copy_from_slice(&rva.to_le_bytes());
+        opt[data_dirs_at + index * 8 + 4..data_dirs_at + index * 8 + 8].copy_from_slice(&size.to_le_bytes());
     };
     dir(&mut opt, 1, import_dir);
     dir(&mut opt, 10, load_dir);

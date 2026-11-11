@@ -1,4 +1,4 @@
-use super::crafted::{pe, Pe};
+use super::crafted::{pe, pe32, Pe};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -245,5 +245,56 @@ fn every_violation_is_reported_not_only_the_first() {
             ViolationKind::PeRuntimeImport,
             ViolationKind::PeRuntimeImport
         ]
+    );
+}
+
+/// The 32-bit load config directory is shorter, and its `DependentLoadFlags` sit at a different offset.
+const FULL32: u32 = 0x40;
+
+fn pe32_kinds(imports: &[&str], load_config: Option<(u16, u32)>) -> Vec<ViolationKind> {
+    kinds(&pe32(&Pe {
+        imports,
+        delay_imports: &[],
+        load_config,
+    }))
+}
+
+#[test]
+fn a_hardened_pe32_passes() {
+    assert_eq!(pe32_kinds(&["KERNEL32.dll"], Some((0x800, FULL32))), vec![]);
+}
+
+#[test]
+fn a_pe32_without_system32_in_its_flags_is_reported() {
+    assert_eq!(
+        pe32_kinds(&["KERNEL32.dll"], Some((0x400, FULL32))),
+        vec![ViolationKind::PeDependentLoadFlags]
+    );
+}
+
+#[test]
+fn a_pe32_that_searches_the_executables_folder_is_reported() {
+    assert_eq!(
+        pe32_kinds(&["KERNEL32.dll"], Some((0x800 | 0x200, FULL32))),
+        vec![ViolationKind::PeDependentLoadFlags]
+    );
+}
+
+#[test]
+fn a_pe32_without_a_load_config_or_with_one_too_short_is_reported() {
+    for load_config in [None, Some((0x800, 0x30))] {
+        assert_eq!(
+            pe32_kinds(&["KERNEL32.dll"], load_config),
+            vec![ViolationKind::PeDependentLoadFlags],
+            "{load_config:?}"
+        );
+    }
+}
+
+#[test]
+fn a_pe32_that_imports_a_redistributable_is_reported() {
+    assert_eq!(
+        pe32_kinds(&["KERNEL32.dll", "VCRUNTIME140.dll"], Some((0x800, FULL32))),
+        vec![ViolationKind::PeRuntimeImport]
     );
 }
