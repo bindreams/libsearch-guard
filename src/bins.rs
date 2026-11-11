@@ -36,9 +36,13 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///   CRT stays dynamic, unless the build already links the whole CRT statically (`+crt-static`): then these
 ///   arguments are skipped and it stays static;
 /// - set `/DEPENDENTLOADFLAG:0x800`, so its imports are searched in System32 only;
-/// - call `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` before `main`, so a `LoadLibrary` call
-///   without flags, including one made inside a system DLL, searches System32 only. If that call fails, the
-///   process writes the error to stderr and terminates before `main`.
+/// - call `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` before `main`, from the `.CRT$XIAB` slot,
+///   so a `LoadLibrary` call without flags, including one made inside a system DLL, searches System32 only.
+///   The CRT runs that slot before every `.CRT$XC*` initializer (C++ constructors, `ctor`-style crates). If the
+///   call fails, the process writes the error to stderr and terminates before `main`.
+///
+/// What runs before that call: TLS callbacks (`.CRT$XL*`), the CRT's own start-up code and its `.CRT$XIAA`
+/// initializers, and the loader's resolution of the import table, which `/DEPENDENTLOADFLAG` covers.
 ///
 /// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
 /// package's library, integration tests, examples and `cdylib`s are not affected. On a target that is not

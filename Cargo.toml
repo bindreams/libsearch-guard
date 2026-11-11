@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "fixtures/probe", "fixtures/planted"]
+members = [".", "fixtures/early", "fixtures/probe", "fixtures/planted"]
 
 [package]
 name = "libsearch-guard"

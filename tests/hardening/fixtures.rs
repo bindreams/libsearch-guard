@@ -67,20 +67,39 @@ pub fn file_of<'a>(artifacts: &'a [Artifact], target: &str, kind: &str, harness:
         .unwrap_or_else(|| panic!("{target} ({kind}) has no file to inspect"))
 }
 
+/// The probe package's two executables, built the same way.
+struct Built {
+    /// Loads a DLL by name, as the arguments say.
+    probe: PathBuf,
+    /// Reports what a dependency's pre-`main` initializer got from loading a DLL.
+    #[cfg_attr(not(windows), allow(dead_code, reason = "only the Windows tests run it"))]
+    early_probe: PathBuf,
+}
+
 pub fn probe(kind: Probe) -> &'static Path {
-    static HARDENED: OnceLock<PathBuf> = OnceLock::new();
-    static PLAIN: OnceLock<PathBuf> = OnceLock::new();
+    &built(kind).probe
+}
+
+/// The executable whose dependency's pre-`main` initializer tries to load `planted.dll`.
+#[cfg(windows)]
+pub fn early_probe(kind: Probe) -> &'static Path {
+    &built(kind).early_probe
+}
+
+fn built(kind: Probe) -> &'static Built {
+    static HARDENED: OnceLock<Built> = OnceLock::new();
+    static PLAIN: OnceLock<Built> = OnceLock::new();
     #[cfg(windows)]
-    static CRT_STATIC: OnceLock<PathBuf> = OnceLock::new();
-    static SEARCHES: OnceLock<PathBuf> = OnceLock::new();
+    static CRT_STATIC: OnceLock<Built> = OnceLock::new();
+    static SEARCHES: OnceLock<Built> = OnceLock::new();
     match kind {
         Probe::Hardened => {
-            HARDENED.get_or_init(|| probe_bin("probe-hardened", &[("LIBSEARCH_GUARD_HARDEN_PROBE", "1")]))
+            HARDENED.get_or_init(|| probe_bins("probe-hardened", &[("LIBSEARCH_GUARD_HARDEN_PROBE", "1")]))
         }
-        Probe::Plain => PLAIN.get_or_init(|| probe_bin("probe-plain", &[])),
+        Probe::Plain => PLAIN.get_or_init(|| probe_bins("probe-plain", &[])),
         #[cfg(windows)]
         Probe::HardenedCrtStatic => CRT_STATIC.get_or_init(|| {
-            probe_bin(
+            probe_bins(
                 "probe-hardened-crt-static",
                 &[
                     ("LIBSEARCH_GUARD_HARDEN_PROBE", "1"),
@@ -88,7 +107,7 @@ pub fn probe(kind: Probe) -> &'static Path {
                 ],
             )
         }),
-        Probe::SearchesItsFolder if cfg!(windows) => probe(Probe::Plain),
+        Probe::SearchesItsFolder if cfg!(windows) => built(Probe::Plain),
         Probe::SearchesItsFolder => SEARCHES.get_or_init(|| {
             let origin = if cfg!(target_os = "macos") {
                 "@executable_path/lib"
@@ -96,14 +115,17 @@ pub fn probe(kind: Probe) -> &'static Path {
                 "$ORIGIN/lib"
             };
             let flags = format!("-C link-arg=-Wl,-rpath,{origin}");
-            probe_bin("probe-searches", &[("RUSTFLAGS", &flags)])
+            probe_bins("probe-searches", &[("RUSTFLAGS", &flags)])
         }),
     }
 }
 
-fn probe_bin(target_dir_name: &str, envs: &[(&str, &str)]) -> PathBuf {
+fn probe_bins(target_dir_name: &str, envs: &[(&str, &str)]) -> Built {
     let artifacts = cargo(&["build"], "probe", target_dir_name, envs);
-    file_of(&artifacts, "probe", "bin", false).to_owned()
+    Built {
+        probe: file_of(&artifacts, "probe", "bin", false).to_owned(),
+        early_probe: file_of(&artifacts, "early_probe", "bin", false).to_owned(),
+    }
 }
 
 #[cfg(windows)]

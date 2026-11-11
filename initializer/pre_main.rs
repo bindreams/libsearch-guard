@@ -22,9 +22,9 @@ unsafe fn write_stderr(bytes: &[u8]) {
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), bytes.as_ptr(), bytes.len() as u32, &mut written, core::ptr::null_mut());
 }
 
-unsafe extern "C" fn initialize() {
+unsafe extern "C" fn initialize() -> i32 {
     if SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) != 0 {
-        return;
+        return 0;
     }
     let code = GetLastError();
     let mut hex = *b"00000000\r\n";
@@ -37,8 +37,11 @@ unsafe extern "C" fn initialize() {
     write_stderr(b"libsearch-guard: SetDefaultDllDirectories failed, error 0x");
     write_stderr(&hex);
     TerminateProcess(GetCurrentProcess(), STATUS_FAIL_FAST_EXCEPTION);
+    1
 }
 
+// `.CRT$XIAB` is a C initializer slot (`int (*)(void)`): the CRT runs the `.CRT$XI*` entries, in section-name
+// order, before every `.CRT$XC*` entry, which is where C++ constructors and `ctor`-style crates register.
 #[used]
-#[link_section = ".CRT$XCU"]
-static INITIALIZER: unsafe extern "C" fn() = initialize;
+#[link_section = ".CRT$XIAB"]
+static INITIALIZER: unsafe extern "C" fn() -> i32 = initialize;

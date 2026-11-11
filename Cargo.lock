@@ -15,6 +15,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "early"
+version = "0.0.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -97,6 +104,7 @@ version = "0.0.0"
 name = "probe"
 version = "0.0.0"
 dependencies = [
+ "early",
  "libsearch-guard",
  "windows-sys",
 ]

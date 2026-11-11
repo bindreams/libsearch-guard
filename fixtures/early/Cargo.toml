@@ -1,0 +1,9 @@
+[package]
+name = "early"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Test fixture: a dependency whose pre-main initializer loads planted.dll by bare name, as a C++ static constructor or a ctor-style crate may."
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
