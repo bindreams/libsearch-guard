@@ -78,21 +78,21 @@ pub(super) fn check<Elf: FileHeader<Endian = object::Endianness>>(
             .map(|entry| entry.val(endian))
     };
     let (Some(address), Some(size)) = (value_of(DT_STRTAB), value_of(DT_STRSZ)) else {
-        return Err(VerifyError::Unreadable(
-            "the dynamic section has no string table (DT_STRTAB, DT_STRSZ)".into(),
+        return Err(VerifyError::unreadable(
+            "the dynamic section has no string table (DT_STRTAB, DT_STRSZ)",
         ));
     };
     let mut table = None;
     for segment in segments.iter().filter(|segment| segment.p_type(endian) == PT_LOAD) {
         table = segment
             .data_range(endian, data, address, size)
-            .map_err(|()| VerifyError::Unreadable("a loadable segment lies outside the file".into()))?;
+            .map_err(|()| VerifyError::unreadable("a loadable segment lies outside the file"))?;
         if table.is_some() {
             break;
         }
     }
     let Some(table) = table else {
-        return Err(VerifyError::Unreadable(format!(
+        return Err(VerifyError::unreadable(format!(
             "the dynamic string table at {address:#x} is not inside any loadable segment"
         )));
     };

@@ -70,27 +70,59 @@ impl fmt::Display for Violation {
     }
 }
 
-/// Why [`verify`] did not pass a file.
+/// Why [`verify`] did not pass a file. More variants may be added in a minor release.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum VerifyError {
     /// The file could not be read.
     Io(std::io::Error),
-    /// The file is not a PE, ELF or Mach-O executable this crate can read, or a slice of a universal binary is
-    /// not a Mach-O image. Violations found before the unreadable part are in the message.
-    Unreadable(String),
+    /// The file is not a PE, ELF or Mach-O executable this crate can read, a slice of a universal binary is not a
+    /// Mach-O image, or a part of it (a library path, say) is not valid UTF-8, so a check could not be made.
+    Unreadable {
+        /// What could not be read.
+        why: String,
+        /// The violations found before the unreadable part; each keeps its kind.
+        found: Vec<Violation>,
+    },
     /// The file breaks one or more rules; every violation found is listed.
     Violations(Vec<Violation>),
+}
+
+impl VerifyError {
+    fn unreadable(why: impl Into<String>) -> Self {
+        VerifyError::Unreadable {
+            why: why.into(),
+            found: Vec::new(),
+        }
+    }
 }
 
 impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VerifyError::Io(e) => write!(f, "cannot read the file: {e}"),
-            VerifyError::Unreadable(why) => write!(f, "cannot read the executable: {why}"),
+            VerifyError::Unreadable { why, found } => {
+                write!(f, "cannot read the executable: {why}")?;
+                if !found.is_empty() {
+                    write!(f, "; found before that:")?;
+                    for v in found {
+                        write!(
+                            f,
+                            "
+  {v}"
+                        )?;
+                    }
+                }
+                Ok(())
+            }
             VerifyError::Violations(violations) => {
                 write!(f, "{} library-search violation(s):", violations.len())?;
                 for v in violations {
-                    write!(f, "\n  {v}")?;
+                    write!(
+                        f,
+                        "
+  {v}"
+                    )?;
                 }
                 Ok(())
             }
@@ -122,13 +154,7 @@ fn verify_bytes(data: &[u8]) -> Result<(), VerifyError> {
         Ok(()) if violations.is_empty() => Ok(()),
         Ok(()) => Err(VerifyError::Violations(violations)),
         // What was found before the unreadable part is not lost.
-        Err(VerifyError::Unreadable(why)) if !violations.is_empty() => {
-            let found: Vec<String> = violations.iter().map(Violation::to_string).collect();
-            Err(VerifyError::Unreadable(format!(
-                "{why}; found before that: {}",
-                found.join("; ")
-            )))
-        }
+        Err(VerifyError::Unreadable { why, .. }) => Err(VerifyError::Unreadable { why, found: violations }),
         Err(error) => Err(error),
     }
 }
@@ -143,7 +169,7 @@ fn check(data: &[u8], out: &mut Vec<Violation>) -> Result<(), VerifyError> {
         FileKind::MachO64 => macho::check::<MachHeader64<Endianness>>(data, out),
         FileKind::MachOFat32 => check_slices(MachOFatFile32::parse(data).map_err(unreadable)?.arches(), data, out),
         FileKind::MachOFat64 => check_slices(MachOFatFile64::parse(data).map_err(unreadable)?.arches(), data, out),
-        other => Err(VerifyError::Unreadable(format!(
+        other => Err(VerifyError::unreadable(format!(
             "{other:?} is not a PE, ELF or Mach-O executable"
         ))),
     }
@@ -158,7 +184,7 @@ fn check_slices<A: FatArch>(arches: &[A], data: &[u8], out: &mut Vec<Violation>)
             FileKind::MachO32 => macho::check::<MachHeader32<Endianness>>(slice, out)?,
             FileKind::MachO64 => macho::check::<MachHeader64<Endianness>>(slice, out)?,
             other => {
-                return Err(VerifyError::Unreadable(format!(
+                return Err(VerifyError::unreadable(format!(
                     "a slice of a universal binary is {other:?}, not a Mach-O image"
                 )))
             }
@@ -168,5 +194,5 @@ fn check_slices<A: FatArch>(arches: &[A], data: &[u8], out: &mut Vec<Violation>)
 }
 
 fn unreadable(error: object::Error) -> VerifyError {
-    VerifyError::Unreadable(error.to_string())
+    VerifyError::unreadable(error.to_string())
 }

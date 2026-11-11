@@ -119,7 +119,7 @@ fn an_absolute_interpreter_passes() {
 fn a_string_table_that_no_segment_maps_is_refused_not_passed() {
     assert!(matches!(
         verify_bytes(&elf_with_unmapped_strtab(&[(DT_RUNPATH, "$ORIGIN")])),
-        Err(VerifyError::Unreadable(_))
+        Err(VerifyError::Unreadable { .. })
     ));
 }
 

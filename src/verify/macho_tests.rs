@@ -143,7 +143,10 @@ fn a_slice_that_is_not_a_macho_image_is_unreadable() {
         ("text", b"not an image".to_vec()),
     ] {
         let result = verify_bytes(&macho_fat(&[clean.clone(), slice]));
-        assert!(matches!(result, Err(VerifyError::Unreadable(_))), "{what}: {result:?}");
+        assert!(
+            matches!(result, Err(VerifyError::Unreadable { .. })),
+            "{what}: {result:?}"
+        );
     }
 }
 
@@ -159,20 +162,37 @@ fn a_universal_binary_that_contains_itself_is_unreadable() {
     image.extend_from_slice(&28u32.to_be_bytes()); // size: the whole file
     image.extend_from_slice(&0u32.to_be_bytes()); // align
     let result = verify_bytes(&image);
-    assert!(matches!(result, Err(VerifyError::Unreadable(_))), "{result:?}");
+    assert!(matches!(result, Err(VerifyError::Unreadable { .. })), "{result:?}");
 }
 
-/// What an earlier slice broke is not lost when a later slice cannot be read.
+/// What an earlier slice broke is not lost when a later slice cannot be read: it keeps its kind.
 #[test]
 fn violations_found_before_an_unreadable_slice_are_in_the_error() {
     let bad = macho(&[rpath_command("@executable_path/lib")]);
-    let Err(VerifyError::Unreadable(why)) = verify_bytes(&macho_fat(&[bad, b"not an image".to_vec()])) else {
+    let Err(error) = verify_bytes(&macho_fat(&[bad, b"not an image".to_vec()])) else {
+        panic!("expected an error");
+    };
+    let VerifyError::Unreadable { why, found } = &error else {
+        panic!("expected an unreadable file: {error:?}");
+    };
+    assert!(!why.is_empty());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, ViolationKind::MachoRpath);
+    assert!(found[0].detail.contains("@executable_path/lib"), "{found:?}");
+    let message = error.to_string();
+    assert!(
+        message.contains(why.as_str()) && message.contains("MachoRpath") && message.contains("@executable_path/lib"),
+        "{message}"
+    );
+}
+
+/// Nothing was found before the unreadable part.
+#[test]
+fn an_unreadable_file_with_nothing_found_before_it_has_no_violations() {
+    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(b"hello") else {
         panic!("expected an unreadable file");
     };
-    assert!(
-        why.contains("MachoRpath") && why.contains("@executable_path/lib"),
-        "{why}"
-    );
+    assert!(found.is_empty());
 }
 
 /// Every command that makes dyld load a dylib by name, not only `LC_LOAD_DYLIB`.
