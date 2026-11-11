@@ -40,7 +40,7 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 ///   so a `LoadLibrary` call without flags, including one made inside a system DLL, searches System32 only.
 ///   The CRT runs that slot before every `.CRT$XC*` initializer (C++ constructors, `ctor`-style crates). If the
 ///   call fails, the process writes the error to stderr (to the debugger where there is no usable stderr) and
-///   terminates before `main`; a fast-fail trap (x86, x64, ARM64, ARM64EC and ARM32; an endless loop on any other
+///   terminates before `main`; a fast-fail trap (x86, x64, ARM64 and ARM64EC; an endless loop on any other
 ///   architecture) follows the termination, so it never reaches `main` unhardened.
 ///
 /// What runs before that call, so that a `LoadLibrary` call without flags made there is not protected:
