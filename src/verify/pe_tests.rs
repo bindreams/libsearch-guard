@@ -140,6 +140,7 @@ fn every_redistributable_runtime_is_reported() {
         "vcruntime140d.dll",
         "vcruntime140_1d.dll",
         "vcruntime140_threads.dll",
+        "vcruntime140_threads_app.dll",
         "msvcp140.dll",
         "msvcp140_1.dll",
         "msvcp140_2d.dll",

@@ -132,33 +132,31 @@ fn numbered_suffix(suffix: &str) -> bool {
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// The UWP (VCLibs) copy of a runtime: the debug or numbered forms with `_app` after them, as in
-/// `vcruntime140_1_app` and `msvcp140d_app`.
+/// `base` accepts a runtime's own suffix; this also accepts its UWP (VCLibs) copy, the same name with `_app`
+/// after it, as in `vcruntime140_1_app` and `msvcp140d_app`.
+fn or_uwp(suffix: &str, base: fn(&str) -> bool) -> bool {
+    base(suffix) || suffix.strip_suffix("_app").is_some_and(base)
+}
+
 fn uwp_suffix(suffix: &str) -> bool {
-    debug_suffix(suffix)
-        || suffix
-            .strip_suffix("_app")
-            .is_some_and(|base| debug_suffix(base) || numbered_suffix(base))
+    or_uwp(suffix, |base| debug_suffix(base) || numbered_suffix(base))
 }
 
 fn vcruntime_suffix(suffix: &str) -> bool {
-    uwp_suffix(suffix) || numbered_suffix(suffix) || matches!(suffix, "_threads" | "_threadsd")
+    or_uwp(suffix, |base| {
+        debug_suffix(base) || numbered_suffix(base) || matches!(base, "_threads" | "_threadsd")
+    })
 }
 
 fn msvcp_suffix(suffix: &str) -> bool {
-    uwp_suffix(suffix)
-        || numbered_suffix(suffix)
-        || matches!(
-            suffix,
-            "_atomic_wait"
-                | "_codecvt_ids"
-                | "d_atomic_wait"
-                | "d_codecvt_ids"
-                | "_atomic_wait_app"
-                | "_codecvt_ids_app"
-                | "d_atomic_wait_app"
-                | "d_codecvt_ids_app"
-        )
+    or_uwp(suffix, |base| {
+        debug_suffix(base)
+            || numbered_suffix(base)
+            || matches!(
+                base,
+                "_atomic_wait" | "_codecvt_ids" | "d_atomic_wait" | "d_codecvt_ids"
+            )
+    })
 }
 
 fn mfcm_suffix(suffix: &str) -> bool {

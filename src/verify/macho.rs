@@ -48,8 +48,8 @@ pub(super) fn check<Mach: MachHeader<Endian = object::Endianness>>(
                     continue;
                 }
                 // Only a search path's value is read as text; any other variable's bytes do not matter.
-                let variable = utf8("LC_DYLD_ENVIRONMENT variable", variable)?;
-                let value = utf8("LC_DYLD_ENVIRONMENT", value)?;
+                let variable = String::from_utf8_lossy(variable);
+                let value = utf8(&format!("LC_DYLD_ENVIRONMENT {variable}"), value)?;
                 // dyld joins an empty element to the leaf name as `/leaf` (a path in the root directory), so it
                 // is not a search relative to anything.
                 for element in value

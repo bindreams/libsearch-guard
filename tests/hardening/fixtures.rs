@@ -204,7 +204,8 @@ fn is_linker_override(name: &str) -> bool {
 ///   `CARGO_ENCODED_RUSTFLAGS` would outrank `RUSTFLAGS`, and the others pick the target, the linker or a
 ///   compiler wrapper (`RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER`, and their `CARGO_BUILD_` forms).
 ///
-/// A cargo config's own `build.target` and linker are not overridden.
+/// A cargo config's own `build.target`, linker, `build.rustc-wrapper` and `build.rustc-workspace-wrapper` are not
+/// overridden.
 fn cargo(subcommand: &[&str], package: &str, target_dir_name: &str, envs: &[(&str, &str)]) -> Vec<Artifact> {
     let target_dir = Path::new(TARGET_TMPDIR).join(target_dir_name);
     let package_manifest = canonical(

@@ -294,3 +294,13 @@ fn a_dyld_variable_that_is_not_a_search_path_may_hold_bytes_that_are_not_utf8() 
         assert_eq!(kinds(&image), vec![], "{setting}");
     }
 }
+
+/// A search variable's name is only shown, so bytes in it that are not UTF-8 do not make the file unreadable.
+#[test]
+fn a_dyld_search_variable_whose_name_is_not_utf8_is_still_checked() {
+    let image = not_utf8(
+        macho(&[dylinker_command(LC_DYLD_ENVIRONMENT, "DYLD_zzmarker_PATH=lib")]),
+        "zzmarker",
+    );
+    assert_eq!(kinds(&image), vec![ViolationKind::MachoDyldEnvironment]);
+}
