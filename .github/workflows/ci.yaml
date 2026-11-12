@@ -144,3 +144,50 @@ jobs:
       # the runner needs the same network and toolchain as the build above.
       - name: Tests
         run: cargo test --workspace --target ${{ matrix.target }}
+
+  # `bins()` cannot harden a GNU target (`windows-gnu`, `windows-gnullvm`): it fails the link of every `[[bin]]`
+  # and nothing else. The script asserts that, so these jobs go red if `bins()` panics, which fails a package
+  # that only depends on the library, or stops failing the link, which ships an unhardened bin.
+  unsupported-targets:
+    name: Unsupported target (${{ matrix.target }} on ${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+          - runner: ubuntu-latest
+            target: x86_64-pc-windows-gnullvm
+          - runner: windows-latest
+            target: x86_64-pc-windows-gnu
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          pin-file: .github/release-toolchain
+          targets: ${{ matrix.target }}
+
+      # windows-latest ships MinGW.
+      - name: Install MinGW-w64 (GNU, Linux)
+        if: matrix.runner == 'ubuntu-latest' && matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+
+      - name: Install llvm-mingw (gnullvm, Linux)
+        if: matrix.target == 'x86_64-pc-windows-gnullvm'
+        run: |
+          set -euo pipefail
+          url=https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-ubuntu-22.04-x86_64.tar.xz
+          curl -fsSL -o "$RUNNER_TEMP/llvm-mingw.tar.xz" "$url"
+          echo "919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Bins fail to link, the library builds
+        shell: bash
+        run: .github/scripts/unsupported-target.sh ${{ matrix.target }}
