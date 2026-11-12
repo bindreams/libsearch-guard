@@ -1,33 +1,16 @@
-use super::{
-    compile_initializer, initializer_command, plan, target_kind, unicode, var_os, Plan, TargetKind,
-    UNHARDENABLE_LINK_ARG,
-};
+use super::{compile_initializer, create_missing_input_dir, initializer_command, plan, unicode, var_os, Plan};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[test]
 fn msvc_windows_is_hardened() {
-    assert_eq!(target_kind("windows", "msvc"), TargetKind::Msvc);
+    assert!(matches!(plan("windows", "msvc", Path::new("out")), Ok(Plan::Harden(_))));
 }
 
 #[test]
 fn other_operating_systems_are_left_alone() {
     for (os, env) in [("linux", "gnu"), ("linux", "musl"), ("macos", ""), ("freebsd", "")] {
-        assert_eq!(target_kind(os, env), TargetKind::Elsewhere, "{os}-{env}");
-    }
-}
-
-/// Cygwin executables are PE files, loaded by the Windows loader like any other.
-#[test]
-fn cygwin_and_the_other_windows_targets_cannot_be_hardened() {
-    for (os, env) in [
-        ("cygwin", ""),
-        ("cygwin", "gnu"),
-        ("windows", "gnu"),
-        ("windows", "gnullvm"),
-        ("windows", ""),
-    ] {
-        assert_eq!(target_kind(os, env), TargetKind::Unhardenable, "{os}-{env}");
+        assert!(matches!(plan(os, env, Path::new("out")), Ok(Plan::Skip)), "{os}-{env}");
     }
 }
 
@@ -44,35 +27,51 @@ fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
     compile_initializer("no-such-target", Path::new("rustc"), &initializer);
 }
 
+/// Cygwin executables are PE files, loaded by the Windows loader like any other. `*-windows-gnullvm` reports
+/// `target_env = "gnu"`, so these are every non-MSVC pair rustc reports.
+const UNHARDENABLE: [(&str, &str); 2] = [("windows", "gnu"), ("cygwin", "")];
+
 /// `bins()` runs for a package built only as a dependency, where cargo never links its bins, so a target it cannot
 /// harden fails the bins' link and not the build script.
 #[test]
 fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
-    for (os, env) in [
-        ("cygwin", ""),
-        ("windows", "gnu"),
-        ("windows", "gnullvm"),
-        ("windows", ""),
-    ] {
-        let Ok(Plan::FailBinsLink { warning }) = plan(os, env, Path::new("out")) else {
+    for (os, env) in UNHARDENABLE {
+        let Ok(Plan::FailBinsLink { warning, .. }) = plan(os, env, Path::new("out")) else {
             panic!("{os}-{env}: not a plan to fail the bins' link");
         };
         assert!(
-            warning.contains(os) && warning.contains("DEPENDENTLOADFLAG") && warning.contains("README"),
+            warning.contains(os) && warning.contains("msvc") && warning.contains("README"),
             "{os}-{env}: {warning}"
         );
     }
 }
 
-/// Cargo hides a dependency's `cargo:warning`, so the linker's own error, which quotes this argument, is all the
-/// reader of a failed build is sure to see. It must be rejected, not read as an option or a library name, and be one
-/// argument.
+/// The link argument must be a file no linker can find, whatever the linker's working directory holds: an absolute
+/// path under a directory of ours, which `bins()` creates empty. Its name is what the reader of a failed build sees in
+/// the linker's error, since cargo hides a dependency's `cargo:warning`.
 #[test]
-fn the_link_argument_names_the_problem_and_is_one_input_file() {
-    assert!(UNHARDENABLE_LINK_ARG.contains("libsearch-guard-cannot-harden-this-target-see-README"));
-    assert!(!UNHARDENABLE_LINK_ARG.starts_with(['-', '@', '/']));
-    assert!(!UNHARDENABLE_LINK_ARG.contains(char::is_whitespace));
-    assert!(!Path::new(UNHARDENABLE_LINK_ARG).exists());
+fn the_link_argument_is_an_absent_file_in_an_empty_directory_of_out_dir() {
+    let out_dir = tempfile::tempdir().unwrap();
+    for (os, env) in UNHARDENABLE {
+        let Ok(Plan::FailBinsLink { missing_input, .. }) = plan(os, env, out_dir.path()) else {
+            panic!("{os}-{env}: not a plan to fail the bins' link");
+        };
+        let input = Path::new(&missing_input);
+        assert!(input.is_absolute(), "{missing_input}");
+        assert!(input.starts_with(out_dir.path()), "{missing_input}");
+        assert_eq!(
+            input.file_name().unwrap(),
+            "libsearch-guard-cannot-harden-this-target-see-README"
+        );
+
+        create_missing_input_dir(&missing_input);
+        // Twice: a rebuild finds the directory there.
+        create_missing_input_dir(&missing_input);
+        let dir = input.parent().unwrap();
+        assert!(dir.is_dir(), "{}", dir.display());
+        assert_eq!(std::fs::read_dir(dir).unwrap().count(), 0, "{}", dir.display());
+        assert!(!input.exists(), "{missing_input}");
+    }
 }
 
 /// A value that is not valid Unicode, as Windows (unpaired surrogate) and Unix (invalid UTF-8) allow.
@@ -120,12 +119,11 @@ fn a_non_unicode_out_dir_does_not_matter_where_nothing_is_compiled() {
 }
 
 #[test]
-fn a_target_that_cannot_be_hardened_does_not_need_a_unicode_out_dir() {
+fn a_non_unicode_out_dir_is_refused_where_the_link_argument_is_a_path_in_it() {
     let out_dir = PathBuf::from(not_unicode());
-    assert!(matches!(
-        plan("windows", "gnu", &out_dir),
-        Ok(Plan::FailBinsLink { .. })
-    ));
+    for (os, env) in UNHARDENABLE {
+        assert!(plan(os, env, &out_dir).is_err(), "{os}-{env}");
+    }
 }
 
 #[test]

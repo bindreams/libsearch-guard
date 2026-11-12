@@ -175,7 +175,9 @@ jobs:
       # windows-latest ships MinGW.
       - name: Install MinGW-w64 (GNU, Linux)
         if: matrix.runner == 'ubuntu-latest' && matrix.target == 'x86_64-pc-windows-gnu'
-        run: sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
 
       - name: Install llvm-mingw (gnullvm, Linux)
         if: matrix.target == 'x86_64-pc-windows-gnullvm'

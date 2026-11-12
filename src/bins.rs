@@ -1,16 +1,20 @@
 use std::env;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(test)]
 #[path = "bins_tests.rs"]
 mod tests;
 
-/// The argument that fails the link of every `[[bin]]` on a target `bins()` cannot harden. It is a file that does
-/// not exist, which GNU ld and clang or lld alike reject, naming the file; cargo hides a dependency's
+/// The file name of the link argument that fails the link of every `[[bin]]` on a target `bins()` cannot harden.
+/// The file never exists, and every linker rejects a missing input naming it; cargo hides a dependency's
 /// `cargo:warning`, so this name is what the reader of a failed build sees.
-const UNHARDENABLE_LINK_ARG: &str = "libsearch-guard-cannot-harden-this-target-see-README";
+const MISSING_INPUT_NAME: &str = "libsearch-guard-cannot-harden-this-target-see-README";
+
+/// The directory of `OUT_DIR` that holds `MISSING_INPUT_NAME`'s path. It is created empty: the argument is
+/// absolute, so a file of that name in the linker's working directory cannot satisfy it.
+const MISSING_INPUT_DIR: &str = "libsearch-guard-unsupported";
 
 /// Source of the pre-`main` initializer.
 const INITIALIZER: &str = include_str!("../initializer/pre_main.rs");
@@ -58,11 +62,14 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 ///
 /// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
-/// package's library, examples and `cdylib`s are not affected. On a target that is not Windows, this does
-/// nothing. On a Windows target that is not MSVC, or on Cygwin, it does not panic: it prints a `cargo:warning`
-/// and fails the link of every `[[bin]]`, so the package's library still builds, and so does a package that
-/// depends on it, where cargo never links its bins. An integration test of a package with a `[[bin]]` fails too,
-/// because cargo links the bins first.
+/// package's library, examples and `cdylib`s are not affected. Integration tests are not hardened on MSVC: the
+/// test executable is not a `[[bin]]`.
+///
+/// On a target that is not Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it does
+/// not harden anything and does not panic: it prints a `cargo:warning` and fails the link of every `[[bin]]`, so
+/// the package's library still builds, and so does a package that depends on it, where cargo never links its bins.
+/// An integration test or a `[[bench]]` of a package with a `[[bin]]` fails too, because cargo links the bins
+/// first.
 ///
 /// `+crt-static` is detected through the target features cargo reports to the build script: `RUSTFLAGS` and
 /// the target config set them, but `cargo rustc -- -C target-feature=+crt-static` reaches the final crate
@@ -73,8 +80,9 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// # Panics
 ///
 /// - If it is not called from a build script.
-/// - On a target it hardens, if `OUT_DIR` is not valid Unicode: rustc and the linker take only Unicode paths. It
-///   is refused before anything is compiled.
+/// - On a target it hardens or fails the link of, if `OUT_DIR` is not valid Unicode: rustc and the linker take
+///   only Unicode paths, and a link argument is a `cargo:` line. It is refused before anything is compiled.
+/// - If it cannot create a directory in `OUT_DIR`, on a target it fails the link of.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
 ///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
@@ -86,9 +94,10 @@ pub fn bins() {
     ) {
         Ok(Plan::Harden(initializer)) => initializer,
         Ok(Plan::Skip) => return,
-        Ok(Plan::FailBinsLink { warning }) => {
+        Ok(Plan::FailBinsLink { warning, missing_input }) => {
+            create_missing_input_dir(&missing_input);
             println!("cargo:warning={warning}");
-            println!("cargo:rustc-link-arg-bins={UNHARDENABLE_LINK_ARG}");
+            println!("cargo:rustc-link-arg-bins={missing_input}");
             return;
         }
         Err(message) => panic!("libsearch-guard: {message}"),
@@ -107,26 +116,6 @@ pub fn bins() {
     println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
 }
 
-/// How `bins()` treats a target, from its `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`.
-#[derive(Debug, PartialEq, Eq)]
-enum TargetKind {
-    /// `windows` + `msvc`: hardened.
-    Msvc,
-    /// Another Windows target, or Cygwin (whose executables are PE files loaded by the Windows loader): the
-    /// loader searches the executable's folder and GNU ld has no `DEPENDENTLOADFLAG`.
-    Unhardenable,
-    /// Not Windows: the loader's behaviour is already right, and `verify` checks it.
-    Elsewhere,
-}
-
-fn target_kind(os: &str, env: &str) -> TargetKind {
-    match (os, env) {
-        ("windows", "msvc") => TargetKind::Msvc,
-        ("windows" | "cygwin", _) => TargetKind::Unhardenable,
-        _ => TargetKind::Elsewhere,
-    }
-}
-
 /// Where `bins()` compiles the initializer to. Both paths are text: rustc takes only Unicode arguments, and the
 /// object is also the text of a `cargo:rustc-link-arg-bins` line.
 #[derive(Debug)]
@@ -142,29 +131,16 @@ enum Plan {
     Harden(Initializer),
     /// Do nothing.
     Skip,
-    /// Print `warning` and fail the link of every bin: the target cannot be hardened, and a bin that looks
-    /// hardened and is not is worse than none.
-    FailBinsLink { warning: String },
+    /// Print `warning` and fail the link of every bin, by handing the linker `missing_input`, a file that does
+    /// not exist: the target cannot be hardened, and a bin that looks hardened and is not is worse than none.
+    FailBinsLink { warning: String, missing_input: String },
 }
 
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
 /// `out_dir`. An error is an `out_dir` that is not Unicode on a target it hardens; it is reached before anything
 /// is compiled.
 fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
-    match target_kind(os, env) {
-        TargetKind::Elsewhere => return Ok(Plan::Skip),
-        TargetKind::Unhardenable => {
-            // The cfg values, not a triple: `*-windows-gnullvm` reports `target_env = "gnu"`.
-            return Ok(Plan::FailBinsLink {
-                warning: format!(
-                    "target_os = {os:?}, target_env = {env:?} cannot be hardened (GNU ld has no DEPENDENTLOADFLAG, and the loader still searches the executable's folder), so linking every [[bin]] of this package fails; the library still builds (see the README, Platform notes)"
-                ),
-            });
-        }
-        TargetKind::Msvc => {}
-    }
-    let unicode_path = |name: &str| {
-        let path = out_dir.join(name);
+    let unicode_path = |path: PathBuf| {
         path.to_str().map(str::to_owned).ok_or_else(|| {
             format!(
                 "{} is not valid Unicode, and the paths handed to rustc and the linker must be; use a target directory with a Unicode path",
@@ -172,10 +148,33 @@ fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
             )
         })
     };
+    match (os, env) {
+        ("windows", "msvc") => {}
+        // Another Windows target, or Cygwin (whose executables are PE files loaded by the Windows loader).
+        ("windows" | "cygwin", _) => {
+            return Ok(Plan::FailBinsLink {
+                // The cfg values, not a triple: `*-windows-gnullvm` reports `target_env = "gnu"`.
+                warning: format!(
+                    "target_os = {os:?}, target_env = {env:?} cannot be hardened (libsearch-guard hardens only windows + msvc targets: it needs the MSVC linker's /DEPENDENTLOADFLAG and static VC runtime), so linking every [[bin]] of this package fails; the library still builds (see the README, Platform notes)"
+                ),
+                missing_input: unicode_path(out_dir.join(MISSING_INPUT_DIR).join(MISSING_INPUT_NAME))?,
+            });
+        }
+        // Not Windows: the loader's behaviour is already right, and `verify` checks it.
+        _ => return Ok(Plan::Skip),
+    }
     Ok(Plan::Harden(Initializer {
-        source: unicode_path("libsearch_guard_pre_main.rs")?,
-        object: unicode_path("libsearch_guard_pre_main.obj")?,
+        source: unicode_path(out_dir.join("libsearch_guard_pre_main.rs"))?,
+        object: unicode_path(out_dir.join("libsearch_guard_pre_main.obj"))?,
     }))
+}
+
+/// Creates the empty directory that holds `missing_input`, if it is not there. The file itself is never created.
+fn create_missing_input_dir(missing_input: &str) {
+    let dir = Path::new(missing_input)
+        .parent()
+        .unwrap_or_else(|| panic!("libsearch-guard: {missing_input} has no directory"));
+    std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("libsearch-guard: cannot create {}: {e}", dir.display()));
 }
 
 /// Compiles the initializer to an object file with the build's own `rustc`.
