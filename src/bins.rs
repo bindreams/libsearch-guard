@@ -75,10 +75,10 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// # Panics
 ///
 /// - If it is not called from a build script.
-/// - On a Windows or Cygwin target, if `OUT_DIR` is not valid Unicode, or contains a line break: rustc and the
-///   linker take only Unicode paths, and a link argument is a `cargo:` line, which a line break would split. It is
-///   refused before anything is compiled. This is a limit: use a target directory with a Unicode path and no line
-///   break.
+/// - On a Windows or Cygwin target, if `OUT_DIR` is not valid Unicode, or contains a newline: rustc and the
+///   linker take only Unicode paths, and a link argument is a `cargo:` line, which a newline would end. It is
+///   refused before anything is compiled. This is a limit: use a target directory with a Unicode path and no
+///   newline.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
 ///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
@@ -132,39 +132,39 @@ enum Plan {
 }
 
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
-/// `out_dir`. An error is an `out_dir` that is not Unicode, or holds a line break, on a Windows or Cygwin target; it
+/// `out_dir`. An error is an `out_dir` that is not Unicode, or holds a newline, on a Windows or Cygwin target; it
 /// is reached before anything is compiled.
 fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
-    match (os, env) {
-        ("windows", "msvc") => {
-            let out_dir = usable_out_dir(out_dir)?;
-            Ok(Plan::Harden(Initializer {
-                source: in_dir(out_dir, "libsearch_guard_pre_main.rs"),
-                object: in_dir(out_dir, "libsearch_guard_pre_main.obj"),
-            }))
-        }
+    let out_dir = match os {
+        "windows" | "cygwin" => usable_out_dir(out_dir)?,
+        // Not Windows: the loader's behaviour is already right, and `verify` checks it.
+        _ => return Ok(Plan::Skip),
+    };
+    Ok(match (os, env) {
+        ("windows", "msvc") => Plan::Harden(Initializer {
+            source: in_dir(out_dir, "libsearch_guard_pre_main.rs"),
+            object: in_dir(out_dir, "libsearch_guard_pre_main.obj"),
+        }),
         // Another Windows target, or Cygwin (whose executables are PE files loaded by the Windows loader).
-        ("windows" | "cygwin", _) => Ok(Plan::FailBinsLink {
+        _ => Plan::FailBinsLink {
             // The cfg values, not a triple: `*-windows-gnullvm` reports `target_env = "gnu"`.
             warning: format!(
                 "target_os = {os:?}, target_env = {env:?} cannot be hardened (only windows + msvc is), so the link of every [[bin]] of this package fails rather than building unhardened bins; the library still builds (see the README, Platform notes)"
             ),
-            missing_input: in_dir(usable_out_dir(out_dir)?, MISSING_INPUT_NAME),
-        }),
-        // Not Windows: the loader's behaviour is already right, and `verify` checks it.
-        _ => Ok(Plan::Skip),
-    }
+            missing_input: in_dir(out_dir, MISSING_INPUT_NAME),
+        },
+    })
 }
 
-/// `out_dir` as text that can go into a `cargo:` line and reach rustc and the linker: valid Unicode, with no line
-/// break, which would split the line or the argument.
+/// `out_dir` as text that can go into a `cargo:` line and reach rustc and the linker: valid Unicode, with no
+/// newline, which ends a `cargo:` line (cargo splits build-script output on newlines only).
 fn usable_out_dir(out_dir: &Path) -> Result<&str, String> {
     match out_dir.to_str() {
         None => Err(format!(
             "{out_dir:?} is not valid Unicode, and the paths handed to rustc and the linker must be; use a target directory with a Unicode path"
         )),
-        Some(text) if text.contains(['\n', '\r']) => Err(format!(
-            "{out_dir:?} contains a line break, which would split the `cargo:` line that carries it; use a target directory with no line break in its path"
+        Some(text) if text.contains('\n') => Err(format!(
+            "{out_dir:?} contains a newline, which would end the `cargo:` line that carries it; use a target directory with no newline in its path"
         )),
         Some(text) => Ok(text),
     }

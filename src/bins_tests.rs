@@ -89,17 +89,15 @@ fn a_variable_that_is_not_unicode_is_not_called_unset() {
 }
 
 /// `OUT_DIR`s that cannot go into a `cargo:` line, each with the cause and the remedy its refusal names: rustc
-/// takes only Unicode arguments, and a line break splits the line.
-fn unusable_out_dirs() -> [(PathBuf, &'static str, &'static str); 3] {
-    let line_break = ("contains a line break", "no line break in its path");
+/// takes only Unicode arguments, and a newline ends the line.
+fn unusable_out_dirs() -> [(PathBuf, &'static str, &'static str); 2] {
     [
         (
             PathBuf::from(not_unicode()),
             "is not valid Unicode",
             "with a Unicode path",
         ),
-        (PathBuf::from("my\nout"), line_break.0, line_break.1),
-        (PathBuf::from("my\rout"), line_break.0, line_break.1),
+        (PathBuf::from("my\nout"), "contains a newline", "no newline in its path"),
     ]
 }
 
@@ -116,6 +114,14 @@ fn an_unusable_out_dir_is_refused_before_anything_is_compiled() {
             );
         }
     }
+}
+
+/// A carriage return does not end a `cargo:` line: cargo splits build-script output on newlines only.
+#[test]
+fn a_carriage_return_in_out_dir_is_not_refused() {
+    let out_dir = Path::new("my\rout");
+    assert!(matches!(plan("windows", "msvc", out_dir), Ok(Plan::Harden(_))));
+    assert!(matches!(plan("windows", "gnu", out_dir), Ok(Plan::FailBinsLink { .. })));
 }
 
 #[test]
