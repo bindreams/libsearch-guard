@@ -27,20 +27,20 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Runs a build that must fail because the marker input is missing. The match is the error line of the tool that
-# reports it, not the marker alone: rustc prints the whole link command line on any link failure.
-#   gnu (gcc driver hands it to GNU ld): "ld: cannot find <path>/<marker>: No such file or directory"
-#   gnullvm (the clang driver checks inputs itself): "clang: error: no such file or directory: '<path>/<marker>'"
-# Fixed strings around the marker, so the path may hold any character. No `grep -q` in the pipelines: under
-# pipefail, an early exit could fail the upstream grep with SIGPIPE.
+# Runs a build that must fail because the marker input is missing. The match is the linker's error line (the
+# linker rustc runs: the gcc or clang driver), not the marker alone: rustc prints the whole link command line on
+# any link failure.
+#   gnu (gcc, whose GNU ld reports it): "ld: cannot find <path>/<marker>: No such file or directory"
+#   gnullvm (clang, which checks its inputs itself): "clang: error: no such file or directory: '<path>/<marker>'"
+# Fixed strings around the marker, so the path may hold any character.
 expect_marker_failure() {
 	local output
 	if output=$("$@" 2>&1); then
 		echo "::error::expected '$*' to fail"
 		exit 1
 	fi
-	if ! grep -F -- "cannot find " <<<"$output" | grep -F -- "$marker: No such file or directory" >/dev/null &&
-		! grep -F -- "no such file or directory: '" <<<"$output" | grep -F -- "$marker'" >/dev/null; then
+	if ! grep -Fq -- "$marker: No such file or directory" < <(grep -F -- "cannot find " <<<"$output") &&
+		! grep -Fq -- "$marker'" < <(grep -F -- "no such file or directory: '" <<<"$output"); then
 		echo "::error::'$*' failed without the linker reporting the missing $marker:"
 		echo "$output"
 		exit 1
