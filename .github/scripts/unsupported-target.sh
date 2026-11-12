@@ -17,6 +17,13 @@ fi
 target=$1
 marker=libsearch-guard-cannot-harden-this-target-see-README
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# A path written into Cargo.toml is read by cargo, not by bash: under Git Bash on Windows it needs the
+# Windows form.
+if command -v cygpath >/dev/null; then
+	repo_manifest_path=$(cygpath -m "$repo")
+else
+	repo_manifest_path=$repo
+fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -57,7 +64,7 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-probe = { path = "$repo/fixtures/probe" }
+probe = { path = "$repo_manifest_path/fixtures/probe" }
 
 [workspace]
 TOML
