@@ -7,6 +7,11 @@ use std::process::Command;
 #[path = "bins_tests.rs"]
 mod tests;
 
+/// The file name of the link argument that fails the link of every `[[bin]]` on a target `bins()` cannot harden.
+/// Cargo hides a dependency's `cargo:warning`, so this name is what the reader of a failed build sees. The argument
+/// is its absolute path in `OUT_DIR`, so a file of that name in the linker's working directory cannot satisfy it.
+const MISSING_INPUT_NAME: &str = "libsearch-guard-cannot-harden-this-target-see-README";
+
 /// Source of the pre-`main` initializer.
 const INITIALIZER: &str = include_str!("../initializer/pre_main.rs");
 
@@ -53,9 +58,13 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 ///
 /// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
-/// package's library, integration tests, examples and `cdylib`s are not affected. On a target that is not
-/// Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it fails the build (see
-/// Panics).
+/// package's library, examples and `cdylib`s are not affected. Integration tests are not hardened on MSVC: the
+/// test executable is not a `[[bin]]`.
+///
+/// On a target that is not Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it
+/// hardens nothing and does not panic (see Panics): it prints a `cargo:warning` and fails the link of every
+/// `[[bin]]`. The library, and a package that only depends on it, still build; an integration test or `[[bench]]`
+/// of a package with a `[[bin]]` fails, since cargo links the bins first.
 ///
 /// `+crt-static` is detected through the target features cargo reports to the build script: `RUSTFLAGS` and
 /// the target config set them, but `cargo rustc -- -C target-feature=+crt-static` reaches the final crate
@@ -66,10 +75,10 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// # Panics
 ///
 /// - If it is not called from a build script.
-/// - On a Windows target that is not `*-windows-msvc`, or on Cygwin (whose executables are PE files loaded by
-///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened.
-/// - On a target it hardens, if `OUT_DIR` is not valid Unicode: rustc and the linker take only Unicode paths. It
-///   is refused before anything is compiled.
+/// - On a Windows or Cygwin target, if `OUT_DIR` is not valid Unicode, or contains a newline: rustc and the
+///   linker take only Unicode paths, and a link argument is a `cargo:` line, which a newline would end. It is
+///   refused before anything is compiled. This is a limit: use a target directory with a Unicode path and no
+///   newline.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
 ///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
@@ -79,8 +88,13 @@ pub fn bins() {
         &var("CARGO_CFG_TARGET_ENV"),
         Path::new(&out_dir),
     ) {
-        Ok(Some(initializer)) => initializer,
-        Ok(None) => return,
+        Ok(Plan::Harden(initializer)) => initializer,
+        Ok(Plan::Skip) => return,
+        Ok(Plan::FailBinsLink { warning, missing_input }) => {
+            println!("cargo:warning={warning}");
+            println!("cargo:rustc-link-arg-bins={missing_input}");
+            return;
+        }
         Err(message) => panic!("libsearch-guard: {message}"),
     };
     compile_initializer(&var("TARGET"), Path::new(&var_os("RUSTC")), &initializer);
@@ -97,22 +111,6 @@ pub fn bins() {
     println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
 }
 
-/// Whether `bins()` hardens a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`. An error is
-/// a Windows target it cannot harden.
-fn hardens(os: &str, env: &str) -> Result<bool, String> {
-    match (os, env) {
-        ("windows", "msvc") => Ok(true),
-        ("windows", _) => Err(format!(
-            "only windows-msvc is supported on Windows (this target's env is {env:?}): GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
-        )),
-        ("cygwin", _) => Err(
-            "cygwin is not supported: its executables are PE files loaded by the Windows loader, and GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
-                .into(),
-        ),
-        _ => Ok(false),
-    }
-}
-
 /// Where `bins()` compiles the initializer to. Both paths are text: rustc takes only Unicode arguments, and the
 /// object is also the text of a `cargo:rustc-link-arg-bins` line.
 #[derive(Debug)]
@@ -121,26 +119,64 @@ struct Initializer {
     object: String,
 }
 
+/// What `bins()` does for a target.
+#[derive(Debug)]
+enum Plan {
+    /// Compile the initializer and link it, with the other arguments, into every bin.
+    Harden(Initializer),
+    /// Do nothing.
+    Skip,
+    /// Print `warning` and fail every bin's link with `missing_input`, a file that never exists: an unhardened bin
+    /// that looks hardened is worse than none.
+    FailBinsLink { warning: String, missing_input: String },
+}
+
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
-/// `out_dir`: nothing, or compile the initializer. An error is a target it cannot harden, or an `out_dir` that
-/// is not Unicode; it is reached before anything is compiled.
-fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Option<Initializer>, String> {
-    if !hardens(os, env)? {
-        return Ok(None);
-    }
-    let unicode_path = |name: &str| {
-        let path = out_dir.join(name);
-        path.to_str().map(str::to_owned).ok_or_else(|| {
-            format!(
-                "{} is not valid Unicode, and the paths handed to rustc and the linker must be; use a target directory with a Unicode path",
-                path.display()
-            )
-        })
+/// `out_dir`. An error is an `out_dir` that is not Unicode, or holds a newline, on a Windows or Cygwin target; it
+/// is reached before anything is compiled.
+fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
+    let out_dir = match os {
+        "windows" | "cygwin" => usable_out_dir(out_dir)?,
+        // Not Windows: the loader's behaviour is already right, and `verify` checks it.
+        _ => return Ok(Plan::Skip),
     };
-    Ok(Some(Initializer {
-        source: unicode_path("libsearch_guard_pre_main.rs")?,
-        object: unicode_path("libsearch_guard_pre_main.obj")?,
-    }))
+    Ok(match (os, env) {
+        ("windows", "msvc") => Plan::Harden(Initializer {
+            source: in_dir(out_dir, "libsearch_guard_pre_main.rs"),
+            object: in_dir(out_dir, "libsearch_guard_pre_main.obj"),
+        }),
+        // Another Windows target, or Cygwin (whose executables are PE files loaded by the Windows loader).
+        _ => Plan::FailBinsLink {
+            // The cfg values, not a triple: `*-windows-gnullvm` reports `target_env = "gnu"`.
+            warning: format!(
+                "target_os = {os:?}, target_env = {env:?} cannot be hardened (only windows + msvc is), so the link of every [[bin]] of this package fails rather than building unhardened bins; the library still builds (see the README, Platform notes)"
+            ),
+            missing_input: in_dir(out_dir, MISSING_INPUT_NAME),
+        },
+    })
+}
+
+/// `out_dir` as text that can go into a `cargo:` line and reach rustc and the linker: valid Unicode, with no
+/// newline, which ends a `cargo:` line (cargo splits build-script output on newlines only).
+fn usable_out_dir(out_dir: &Path) -> Result<&str, String> {
+    match out_dir.to_str() {
+        None => Err(format!(
+            "{out_dir:?} is not valid Unicode, and the paths handed to rustc and the linker must be; use a target directory with a Unicode path"
+        )),
+        Some(text) if text.contains('\n') => Err(format!(
+            "{out_dir:?} contains a newline, which would end the `cargo:` line that carries it; use a target directory with no newline in its path"
+        )),
+        Some(text) => Ok(text),
+    }
+}
+
+/// `name` in the directory `dir`, as text.
+fn in_dir(dir: &str, name: &str) -> String {
+    Path::new(dir)
+        .join(name)
+        .to_str()
+        .expect("Unicode joined with Unicode")
+        .to_owned()
 }
 
 /// Compiles the initializer to an object file with the build's own `rustc`.
