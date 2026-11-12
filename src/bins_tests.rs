@@ -120,8 +120,16 @@ fn an_unusable_out_dir_is_refused_before_anything_is_compiled() {
 #[test]
 fn a_carriage_return_in_out_dir_is_not_refused() {
     let out_dir = Path::new("my\rout");
-    assert!(matches!(plan("windows", "msvc", out_dir), Ok(Plan::Harden(_))));
-    assert!(matches!(plan("windows", "gnu", out_dir), Ok(Plan::FailBinsLink { .. })));
+    let Ok(Plan::Harden(initializer)) = plan("windows", "msvc", out_dir) else {
+        panic!("windows-msvc is hardened");
+    };
+    assert_eq!(Path::new(&initializer.object).parent(), Some(out_dir));
+    for (os, env) in UNHARDENABLE {
+        let Ok(Plan::FailBinsLink { missing_input, .. }) = plan(os, env, out_dir) else {
+            panic!("{os}-{env}: not a plan to fail the bins' link");
+        };
+        assert_eq!(Path::new(&missing_input).parent(), Some(out_dir), "{os}-{env}");
+    }
 }
 
 #[test]
