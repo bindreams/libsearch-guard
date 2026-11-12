@@ -134,8 +134,8 @@ enum Plan {
 }
 
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
-/// `out_dir`. An error is an `out_dir` that is not Unicode on a Windows or Cygwin target, whether it hardens it or
-/// fails the bins' link; it is reached before anything is compiled.
+/// `out_dir`. An error is an `out_dir` that is not Unicode on a Windows or Cygwin target, on both the plan that
+/// hardens the bins and the plan that fails their link; it is reached before anything is compiled.
 fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
     let unicode_path = |path: PathBuf| {
         path.to_str().map(str::to_owned).ok_or_else(|| {

@@ -41,7 +41,9 @@ fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
             panic!("{os}-{env}: not a plan to fail the bins' link");
         };
         assert!(
-            warning.contains(&format!("target_os = {os:?}, target_env = {env:?}")) && warning.contains("README"),
+            warning.contains(&format!("target_os = {os:?}, target_env = {env:?}"))
+                && warning.contains("windows + msvc")
+                && warning.contains("README"),
             "{os}-{env}: {warning}"
         );
     }
