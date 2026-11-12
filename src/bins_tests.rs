@@ -1,4 +1,4 @@
-use super::{compile_initializer, create_missing_input_dir, initializer_command, plan, unicode, var_os, Plan};
+use super::{compile_initializer, initializer_command, plan, unicode, var_os, Plan};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -28,8 +28,9 @@ fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
 }
 
 /// Cygwin executables are PE files, loaded by the Windows loader like any other. `*-windows-gnullvm` reports
-/// `target_env = "gnu"`, so these are every non-MSVC pair rustc reports.
-const UNHARDENABLE: [(&str, &str); 2] = [("windows", "gnu"), ("cygwin", "")];
+/// `target_env = "gnu"`, so these are every non-MSVC pair rustc reports. The last two are made up: every
+/// `windows` pair but msvc, and every `cygwin` pair, takes the same arm.
+const UNHARDENABLE: [(&str, &str); 4] = [("windows", "gnu"), ("cygwin", ""), ("windows", ""), ("windows", "sgx")];
 
 /// `bins()` runs for a package built only as a dependency, where cargo never links its bins, so a target it cannot
 /// harden fails the bins' link and not the build script.
@@ -47,29 +48,21 @@ fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
 }
 
 /// The link argument must be a file no linker can find, whatever the linker's working directory holds: an absolute
-/// path under a directory of ours, which `bins()` creates empty. Its name is what the reader of a failed build sees in
-/// the linker's error, since cargo hides a dependency's `cargo:warning`.
+/// path in `OUT_DIR`, which is never created. Its name is what the reader of a failed build sees in the linker's
+/// error, since cargo hides a dependency's `cargo:warning`.
 #[test]
-fn the_link_argument_is_an_absent_file_in_an_empty_directory_of_out_dir() {
+fn the_link_argument_is_an_absent_absolute_path_in_out_dir() {
     let out_dir = tempfile::tempdir().unwrap();
     for (os, env) in UNHARDENABLE {
         let Ok(Plan::FailBinsLink { missing_input, .. }) = plan(os, env, out_dir.path()) else {
             panic!("{os}-{env}: not a plan to fail the bins' link");
         };
         let input = Path::new(&missing_input);
-        assert!(input.is_absolute(), "{missing_input}");
-        assert!(input.starts_with(out_dir.path()), "{missing_input}");
+        assert_eq!(input.parent(), Some(out_dir.path()), "{missing_input}");
         assert_eq!(
             input.file_name().unwrap(),
             "libsearch-guard-cannot-harden-this-target-see-README"
         );
-
-        create_missing_input_dir(&missing_input);
-        // Twice: a rebuild finds the directory there.
-        create_missing_input_dir(&missing_input);
-        let dir = input.parent().unwrap();
-        assert!(dir.is_dir(), "{}", dir.display());
-        assert_eq!(std::fs::read_dir(dir).unwrap().count(), 0, "{}", dir.display());
         assert!(!input.exists(), "{missing_input}");
     }
 }

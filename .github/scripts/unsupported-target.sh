@@ -29,15 +29,16 @@ trap 'rm -rf "$work"' EXIT
 
 # Runs a build that must fail because the linker cannot find the marker input. The pattern is the linker's own
 # error, not the marker alone: rustc prints the whole link command line on any link failure.
-#   GNU ld: "cannot find <marker>: No such file or directory"
-#   clang:  "no such file or directory: '<marker>'"
+#   GNU ld: "cannot find <path>/<marker>: No such file or directory"
+#   clang:  "no such file or directory: '<path>/<marker>'"
+# The path may hold spaces.
 expect_marker_failure() {
 	local output
 	if output=$("$@" 2>&1); then
 		echo "::error::expected '$*' to fail"
 		exit 1
 	fi
-	if ! grep -Eiq -- "(cannot find |no such file or directory: ')[^ ']*$marker" <<<"$output"; then
+	if ! grep -Eiq -- "(cannot find .*|no such file or directory: '[^']*)$marker" <<<"$output"; then
 		echo "::error::'$*' failed without the linker reporting the missing $marker:"
 		echo "$output"
 		exit 1
