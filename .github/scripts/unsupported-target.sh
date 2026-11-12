@@ -39,8 +39,8 @@ expect_marker_failure() {
 		echo "::error::expected '$*' to fail"
 		exit 1
 	fi
-	if ! grep -Fq -- "$marker: No such file or directory" < <(grep -F -- "cannot find " <<<"$output") &&
-		! grep -Fq -- "$marker'" < <(grep -F -- "no such file or directory: '" <<<"$output"); then
+	if ! grep -Fq -- "$marker: No such file or directory" < <(grep -F -- "cannot find " <<<"$output" || true) &&
+		! grep -Fq -- "$marker'" < <(grep -F -- "no such file or directory: '" <<<"$output" || true); then
 		echo "::error::'$*' failed without the linker reporting the missing $marker:"
 		echo "$output"
 		exit 1
