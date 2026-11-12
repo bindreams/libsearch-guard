@@ -28,8 +28,8 @@ fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
 }
 
 /// Cygwin executables are PE files, loaded by the Windows loader like any other. `*-windows-gnullvm` reports
-/// `target_env = "gnu"`, so these are every non-MSVC pair rustc reports. The last two are made up: every
-/// `windows` pair but msvc, and every `cygwin` pair, takes the same arm.
+/// `target_env = "gnu"`, so the first two are every non-MSVC pair rustc reports. The last two are made up, to pin
+/// that every `windows` pair but msvc, and every `cygwin` pair, takes the same arm.
 const UNHARDENABLE: [(&str, &str); 4] = [("windows", "gnu"), ("cygwin", ""), ("windows", ""), ("windows", "sgx")];
 
 /// `bins()` runs for a package built only as a dependency, where cargo never links its bins, so a target it cannot
@@ -41,7 +41,7 @@ fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
             panic!("{os}-{env}: not a plan to fail the bins' link");
         };
         assert!(
-            warning.contains(os) && warning.contains("msvc") && warning.contains("README"),
+            warning.contains(&format!("target_os = {os:?}, target_env = {env:?}")) && warning.contains("README"),
             "{os}-{env}: {warning}"
         );
     }

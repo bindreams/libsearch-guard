@@ -27,18 +27,19 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Runs a build that must fail because the linker cannot find the marker input. The pattern is the linker's own
-# error, not the marker alone: rustc prints the whole link command line on any link failure.
+# Runs a build that must fail because the linker cannot find the marker input. The match is the linker's own
+# error on one line, not the marker alone: rustc prints the whole link command line on any link failure.
 #   GNU ld: "cannot find <path>/<marker>: No such file or directory"
 #   clang:  "no such file or directory: '<path>/<marker>'"
-# The path may hold spaces.
+# Fixed strings around the marker, so the path may hold any character.
 expect_marker_failure() {
 	local output
 	if output=$("$@" 2>&1); then
 		echo "::error::expected '$*' to fail"
 		exit 1
 	fi
-	if ! grep -Eiq -- "(cannot find .*|no such file or directory: '[^']*)$marker" <<<"$output"; then
+	if ! grep -F -- "cannot find " <<<"$output" | grep -Fq -- "$marker: No such file or directory" &&
+		! grep -F -- "no such file or directory: '" <<<"$output" | grep -Fq -- "$marker'"; then
 		echo "::error::'$*' failed without the linker reporting the missing $marker:"
 		echo "$output"
 		exit 1

@@ -63,8 +63,9 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// test executable is not a `[[bin]]`.
 ///
 /// On a target that is not Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it does
-/// not harden anything and does not panic, except as listed under `# Panics`: it prints a `cargo:warning` and fails the link of every `[[bin]]`, so
-/// the package's library still builds, and so does a package that depends on it, where cargo never links its bins.
+/// not harden anything and does not panic, except as listed under `# Panics`: it prints a `cargo:warning` and fails
+/// the link of every `[[bin]]`, so the package's library still builds, and so does a package that depends on it,
+/// where cargo never links its bins.
 /// An integration test or a `[[bench]]` of a package with a `[[bin]]` fails too, because cargo links the bins
 /// first.
 ///
@@ -133,8 +134,8 @@ enum Plan {
 }
 
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
-/// `out_dir`. An error is an `out_dir` that is not Unicode on a Windows target, whether it hardens it or fails the
-/// bins' link; it is reached before anything is compiled.
+/// `out_dir`. An error is an `out_dir` that is not Unicode on a Windows or Cygwin target, whether it hardens it or
+/// fails the bins' link; it is reached before anything is compiled.
 fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
     let unicode_path = |path: PathBuf| {
         path.to_str().map(str::to_owned).ok_or_else(|| {
