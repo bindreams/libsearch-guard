@@ -55,10 +55,14 @@ cargo build -p probe --bins --examples --tests --target "$target" --target-dir "
 export LIBSEARCH_GUARD_HARDEN_PROBE=1
 
 echo "the library and the examples still build, and the build says the target cannot be hardened"
-# Process substitution, not a pipeline: `grep -q` exits early and would fail the writer under pipefail.
-build_output=$(cargo build -p probe --lib --examples --target "$target" --target-dir "$work/hardened" 2>&1)
+build_status=0
+build_output=$(cargo build -p probe --lib --examples --target "$target" --target-dir "$work/hardened" 2>&1) || build_status=$?
 echo "$build_output"
-if ! grep -Fq -- "cannot be hardened" < <(echo "$build_output"); then
+if ((build_status != 0)); then
+	echo "::error::the hardened library build failed"
+	exit 1
+fi
+if ! grep -Fq -- "cannot be hardened" <<<"$build_output"; then
 	echo "::error::the hardened library build did not warn that the target cannot be hardened"
 	exit 1
 fi

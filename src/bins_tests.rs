@@ -41,6 +41,7 @@ fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
         };
         assert!(
             warning.contains(&format!("target_os = {os:?}, target_env = {env:?}"))
+                && warning.contains("cannot be hardened")
                 && warning.contains("windows + msvc")
                 && warning.contains("README"),
             "{os}-{env}: {warning}"
@@ -87,66 +88,46 @@ fn a_variable_that_is_not_unicode_is_not_called_unset() {
     unicode("TARGET", not_unicode());
 }
 
-/// rustc takes only Unicode arguments and a link argument is a `cargo:` line, so a non-Unicode `OUT_DIR`, where the
-/// source and the object go, is refused by the decision, before rustc runs.
-#[test]
-fn a_non_unicode_out_dir_is_refused_before_anything_is_compiled() {
-    let out_dir = PathBuf::from(not_unicode());
-    let message = plan("windows", "msvc", &out_dir).unwrap_err();
-    assert!(
-        message.contains("is not valid Unicode") && message.contains("use a target directory with a Unicode path"),
-        "{message}"
-    );
+/// `OUT_DIR`s that cannot go into a `cargo:` line, each with the part of the refusal that names its cause: rustc
+/// takes only Unicode arguments, and a `\n` ends the line.
+fn unusable_out_dirs() -> [(PathBuf, &'static str); 2] {
+    [
+        (PathBuf::from(not_unicode()), "is not valid Unicode"),
+        (PathBuf::from("my\nout"), "contains a line break"),
+    ]
 }
 
-/// Directories whose path holds a line break, which would split a `cargo:` line.
-const LINE_BREAK_DIRS: [&str; 2] = ["my\nout", "my\rout"];
-
-/// A `\n` or `\r` in `OUT_DIR` would split the `cargo:rustc-link-arg-bins=` line that carries the object path, so
-/// the decision refuses it before rustc runs.
+/// On msvc the source and the object go in `OUT_DIR`; on a target that cannot be hardened the link argument is a
+/// path in it. Either way the decision refuses it, before rustc runs.
 #[test]
-fn an_out_dir_with_a_line_break_is_refused_before_anything_is_compiled() {
-    for dir in LINE_BREAK_DIRS {
-        let message = plan("windows", "msvc", Path::new(dir)).unwrap_err();
-        assert!(
-            message.contains("line break") && message.contains("use a target directory with"),
-            "{dir:?}: {message}"
-        );
-    }
-}
-
-#[test]
-fn a_non_unicode_out_dir_does_not_matter_where_nothing_is_compiled() {
-    let out_dir = PathBuf::from(not_unicode());
-    for (os, env) in [("linux", "gnu"), ("macos", ""), ("freebsd", "")] {
-        assert!(matches!(plan(os, env, &out_dir), Ok(Plan::Skip)), "{os}-{env}");
-    }
-}
-
-#[test]
-fn a_non_unicode_out_dir_is_refused_where_the_link_argument_is_a_path_in_it() {
-    let out_dir = PathBuf::from(not_unicode());
-    for (os, env) in UNHARDENABLE {
-        assert!(plan(os, env, &out_dir).is_err(), "{os}-{env}");
-    }
-}
-
-#[test]
-fn an_out_dir_with_a_line_break_is_refused_where_the_link_argument_is_a_path_in_it() {
-    for dir in LINE_BREAK_DIRS {
-        for (os, env) in UNHARDENABLE {
-            assert!(plan(os, env, Path::new(dir)).is_err(), "{os}-{env}: {dir:?}");
+fn an_unusable_out_dir_is_refused_before_anything_is_compiled() {
+    for (out_dir, cause) in unusable_out_dirs() {
+        for (os, env) in [("windows", "msvc")].into_iter().chain(UNHARDENABLE) {
+            let message = plan(os, env, &out_dir).unwrap_err();
+            assert!(
+                message.contains(cause) && message.contains("use a target directory with"),
+                "{os}-{env}, {out_dir:?}: {message}"
+            );
         }
     }
 }
 
+/// A `\r` does not end a `cargo:` line: cargo splits build-script output on `\n` only.
 #[test]
-fn an_out_dir_with_a_line_break_does_not_matter_where_nothing_is_compiled() {
-    for dir in LINE_BREAK_DIRS {
+fn a_carriage_return_in_out_dir_is_not_refused() {
+    assert!(matches!(
+        plan("windows", "gnu", Path::new("my\rout")),
+        Ok(Plan::FailBinsLink { .. })
+    ));
+}
+
+#[test]
+fn an_unusable_out_dir_does_not_matter_where_nothing_is_compiled() {
+    for (out_dir, _) in unusable_out_dirs() {
         for (os, env) in [("linux", "gnu"), ("macos", ""), ("freebsd", "")] {
             assert!(
-                matches!(plan(os, env, Path::new(dir)), Ok(Plan::Skip)),
-                "{os}-{env}: {dir:?}"
+                matches!(plan(os, env, &out_dir), Ok(Plan::Skip)),
+                "{os}-{env}, {out_dir:?}"
             );
         }
     }
