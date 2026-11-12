@@ -8,9 +8,8 @@ use std::process::Command;
 mod tests;
 
 /// The file name of the link argument that fails the link of every `[[bin]]` on a target `bins()` cannot harden.
-/// The file never exists, and every linker rejects a missing input naming it; cargo hides a dependency's
-/// `cargo:warning`, so this name is what the reader of a failed build sees. The argument is its absolute path in
-/// `OUT_DIR`, so a file of that name in the linker's working directory cannot satisfy it.
+/// Cargo hides a dependency's `cargo:warning`, so this name is what the reader of a failed build sees. The argument
+/// is its absolute path in `OUT_DIR`, so a file of that name in the linker's working directory cannot satisfy it.
 const MISSING_INPUT_NAME: &str = "libsearch-guard-cannot-harden-this-target-see-README";
 
 /// Source of the pre-`main` initializer.
@@ -62,12 +61,10 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// package's library, examples and `cdylib`s are not affected. Integration tests are not hardened on MSVC: the
 /// test executable is not a `[[bin]]`.
 ///
-/// On a target that is not Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it does
-/// not harden anything and does not panic, except as listed under `# Panics`: it prints a `cargo:warning` and fails
-/// the link of every `[[bin]]`, so the package's library still builds, and so does a package that depends on it,
-/// where cargo never links its bins.
-/// An integration test or a `[[bench]]` of a package with a `[[bin]]` fails too, because cargo links the bins
-/// first.
+/// On a target that is not Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it
+/// hardens nothing and does not panic (see Panics): it prints a `cargo:warning` and fails the link of every
+/// `[[bin]]`. The library, and a package that only depends on it, still build; an integration test or `[[bench]]`
+/// of a package with a `[[bin]]` fails, since cargo links the bins first.
 ///
 /// `+crt-static` is detected through the target features cargo reports to the build script: `RUSTFLAGS` and
 /// the target config set them, but `cargo rustc -- -C target-feature=+crt-static` reaches the final crate
@@ -78,9 +75,10 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// # Panics
 ///
 /// - If it is not called from a build script.
-/// - On a Windows or Cygwin target, if `OUT_DIR` is not valid Unicode: rustc and the linker take only Unicode
-///   paths, and a link argument is a `cargo:` line. It is refused before anything is compiled. This is a limit:
-///   use a target directory with a Unicode path.
+/// - On a Windows or Cygwin target, if `OUT_DIR` is not valid Unicode, or contains a line break: rustc and the
+///   linker take only Unicode paths, and a link argument is a `cargo:` line, which a line break would split. It is
+///   refused before anything is compiled. This is a limit: use a target directory with a Unicode path and no line
+///   break.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
 ///   `core` (tier 3, `-Zbuild-std`) is not supported.
 pub fn bins() {
@@ -128,22 +126,28 @@ enum Plan {
     Harden(Initializer),
     /// Do nothing.
     Skip,
-    /// Print `warning` and fail the link of every bin, by handing the linker `missing_input`, a file that does
-    /// not exist: the target cannot be hardened, and a bin that looks hardened and is not is worse than none.
+    /// Print `warning` and fail every bin's link with `missing_input`, a file that never exists: an unhardened bin
+    /// that looks hardened is worse than none.
     FailBinsLink { warning: String, missing_input: String },
 }
 
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
-/// `out_dir`. An error is an `out_dir` that is not Unicode on a Windows or Cygwin target, on both the plan that
-/// hardens the bins and the plan that fails their link; it is reached before anything is compiled.
+/// `out_dir`. An error is an `out_dir` that is not Unicode, or holds a line break, on a Windows or Cygwin target; it
+/// is reached before anything is compiled.
 fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
     let unicode_path = |path: PathBuf| {
-        path.to_str().map(str::to_owned).ok_or_else(|| {
+        let text = path.to_str().ok_or_else(|| {
             format!(
                 "{} is not valid Unicode, and the paths handed to rustc and the linker must be; use a target directory with a Unicode path",
                 path.display()
             )
-        })
+        })?;
+        if text.contains(['\n', '\r']) {
+            return Err(format!(
+                "{text:?} contains a line break, which would split the `cargo:` line that carries it; use a target directory with no line break in its path"
+            ));
+        }
+        Ok(text.to_owned())
     };
     match (os, env) {
         ("windows", "msvc") => {}
@@ -152,7 +156,7 @@ fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
             return Ok(Plan::FailBinsLink {
                 // The cfg values, not a triple: `*-windows-gnullvm` reports `target_env = "gnu"`.
                 warning: format!(
-                    "target_os = {os:?}, target_env = {env:?} cannot be hardened (libsearch-guard hardens only windows + msvc targets, with DependentLoadFlags, a static VC runtime and a pre-main SetDefaultDllDirectories initializer, and does not support this target), so it fails the link of every [[bin]] of this package rather than build them unhardened; the library still builds (see the README, Platform notes)"
+                    "target_os = {os:?}, target_env = {env:?} cannot be hardened (only windows + msvc is), so the link of every [[bin]] of this package fails rather than build unhardened bins; the library still builds (see the README, Platform notes)"
                 ),
                 missing_input: unicode_path(out_dir.join(MISSING_INPUT_NAME))?,
             });

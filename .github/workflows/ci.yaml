@@ -145,9 +145,8 @@ jobs:
       - name: Tests
         run: cargo test --workspace --target ${{ matrix.target }}
 
-  # `bins()` cannot harden a GNU target (`windows-gnu`, `windows-gnullvm`): it fails the link of every `[[bin]]`
-  # and nothing else. The script asserts that, so these jobs go red if `bins()` panics, which fails a package
-  # that only depends on the library, or stops failing the link, which ships an unhardened bin.
+  # `bins()` cannot harden a GNU target (`windows-gnu`, `windows-gnullvm`): it must fail the link of every `[[bin]]`
+  # and nothing else. The job goes red if it panics or stops failing.
   unsupported-targets:
     name: Unsupported target (${{ matrix.target }} on ${{ matrix.runner }})
     strategy:

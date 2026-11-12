@@ -5,7 +5,7 @@
 # package that only depends on it still build. Needs that target's linker.
 #
 # Builds the `probe` fixture, which calls `bins()` when
-# LIBSEARCH_GUARD_HARDEN_PROBE is set, in two target directories: build
+# LIBSEARCH_GUARD_HARDEN_PROBE is set. Two target directories, because build
 # scripts do not rerun when that variable changes.
 set -euo pipefail
 
@@ -27,9 +27,8 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Runs a build that must fail because the marker input is missing. The match is the linker's error line (the
-# linker rustc runs: the gcc or clang driver), not the marker alone: rustc prints the whole link command line on
-# any link failure.
+# Runs a build that must fail on the missing marker input. Matches the linker's error line, not the marker alone:
+# rustc prints the whole link command on any link failure.
 #   gnu (gcc, whose GNU ld reports it): "ld: cannot find <path>/<marker>: No such file or directory"
 #   gnullvm (clang, which checks its inputs itself): "clang: error: no such file or directory: '<path>/<marker>'"
 # Fixed strings around the marker, so the path may hold any character.
@@ -55,11 +54,18 @@ cargo build -p probe --bins --examples --tests --target "$target" --target-dir "
 
 export LIBSEARCH_GUARD_HARDEN_PROBE=1
 
-echo "the library and the examples still build"
-cargo build -p probe --lib --examples --target "$target" --target-dir "$work/hardened"
+echo "the library and the examples still build, and the build says the target cannot be hardened"
+# Process substitution, not a pipeline: `grep -q` exits early and would fail the writer under pipefail.
+build_output=$(cargo build -p probe --lib --examples --target "$target" --target-dir "$work/hardened" 2>&1)
+echo "$build_output"
+if ! grep -Fq -- "cannot be hardened" < <(echo "$build_output"); then
+	echo "::error::the hardened library build did not warn that the target cannot be hardened"
+	exit 1
+fi
 
 expect_marker_failure cargo build -p probe --bins --target "$target" --target-dir "$work/hardened"
 expect_marker_failure cargo test -p probe --bin probe --no-run --target "$target" --target-dir "$work/hardened"
+expect_marker_failure cargo test -p probe --test scope --no-run --target "$target" --target-dir "$work/hardened"
 
 echo "a package that only depends on the library still builds and links"
 mkdir "$work/consumer"

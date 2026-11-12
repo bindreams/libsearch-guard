@@ -27,9 +27,8 @@ fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
     compile_initializer("no-such-target", Path::new("rustc"), &initializer);
 }
 
-/// Cygwin executables are PE files, loaded by the Windows loader like any other. `*-windows-gnullvm` reports
-/// `target_env = "gnu"`, so the first two are every non-MSVC pair rustc reports. The last two are made up, to pin
-/// that every `windows` pair but msvc, and every `cygwin` pair, takes the same arm.
+/// Non-MSVC Windows and Cygwin pairs: `(windows, gnu)` (also what `*-windows-gnullvm` reports) and `(cygwin, "")`
+/// are real; the other two pin that every non-msvc `windows` pair and every `cygwin` pair take the same arm.
 const UNHARDENABLE: [(&str, &str); 4] = [("windows", "gnu"), ("cygwin", ""), ("windows", ""), ("windows", "sgx")];
 
 /// `bins()` runs for a package built only as a dependency, where cargo never links its bins, so a target it cannot
@@ -49,9 +48,7 @@ fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
     }
 }
 
-/// The link argument must be a file no linker can find, whatever the linker's working directory holds: an absolute
-/// path in `OUT_DIR`, which is never created. Its name is what the reader of a failed build sees in the linker's
-/// error, since cargo hides a dependency's `cargo:warning`.
+/// An absolute path, so a same-named file in the linker's working directory cannot satisfy it.
 #[test]
 fn the_link_argument_is_an_absent_absolute_path_in_out_dir() {
     let out_dir = tempfile::tempdir().unwrap();
@@ -61,10 +58,7 @@ fn the_link_argument_is_an_absent_absolute_path_in_out_dir() {
         };
         let input = Path::new(&missing_input);
         assert_eq!(input.parent(), Some(out_dir.path()), "{missing_input}");
-        assert_eq!(
-            input.file_name().unwrap(),
-            "libsearch-guard-cannot-harden-this-target-see-README"
-        );
+        assert_eq!(input.file_name().unwrap(), super::MISSING_INPUT_NAME);
         assert!(!input.exists(), "{missing_input}");
     }
 }
@@ -105,6 +99,22 @@ fn a_non_unicode_out_dir_is_refused_before_anything_is_compiled() {
     );
 }
 
+/// Directories whose path holds a line break, which would split a `cargo:` line.
+const LINE_BREAK_DIRS: [&str; 2] = ["my\nout", "my\rout"];
+
+/// A `\n` or `\r` in `OUT_DIR` would split the `cargo:rustc-link-arg-bins=` line that carries the object path, so
+/// the decision refuses it before rustc runs.
+#[test]
+fn an_out_dir_with_a_line_break_is_refused_before_anything_is_compiled() {
+    for dir in LINE_BREAK_DIRS {
+        let message = plan("windows", "msvc", Path::new(dir)).unwrap_err();
+        assert!(
+            message.contains("line break") && message.contains("use a target directory with"),
+            "{dir:?}: {message}"
+        );
+    }
+}
+
 #[test]
 fn a_non_unicode_out_dir_does_not_matter_where_nothing_is_compiled() {
     let out_dir = PathBuf::from(not_unicode());
@@ -118,6 +128,27 @@ fn a_non_unicode_out_dir_is_refused_where_the_link_argument_is_a_path_in_it() {
     let out_dir = PathBuf::from(not_unicode());
     for (os, env) in UNHARDENABLE {
         assert!(plan(os, env, &out_dir).is_err(), "{os}-{env}");
+    }
+}
+
+#[test]
+fn an_out_dir_with_a_line_break_is_refused_where_the_link_argument_is_a_path_in_it() {
+    for dir in LINE_BREAK_DIRS {
+        for (os, env) in UNHARDENABLE {
+            assert!(plan(os, env, Path::new(dir)).is_err(), "{os}-{env}: {dir:?}");
+        }
+    }
+}
+
+#[test]
+fn an_out_dir_with_a_line_break_does_not_matter_where_nothing_is_compiled() {
+    for dir in LINE_BREAK_DIRS {
+        for (os, env) in [("linux", "gnu"), ("macos", ""), ("freebsd", "")] {
+            assert!(
+                matches!(plan(os, env, Path::new(dir)), Ok(Plan::Skip)),
+                "{os}-{env}: {dir:?}"
+            );
+        }
     }
 }
 
