@@ -1,28 +1,33 @@
-use super::{compile_initializer, hardens, initializer_command, plan, unicode, var_os};
+use super::{
+    compile_initializer, initializer_command, plan, target_kind, unicode, var_os, Plan, TargetKind,
+    UNHARDENABLE_LINK_ARG,
+};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[test]
 fn msvc_windows_is_hardened() {
-    assert_eq!(hardens("windows", "msvc"), Ok(true));
+    assert_eq!(target_kind("windows", "msvc"), TargetKind::Msvc);
 }
 
 #[test]
 fn other_operating_systems_are_left_alone() {
     for (os, env) in [("linux", "gnu"), ("linux", "musl"), ("macos", ""), ("freebsd", "")] {
-        assert_eq!(hardens(os, env), Ok(false), "{os}-{env}");
+        assert_eq!(target_kind(os, env), TargetKind::Elsewhere, "{os}-{env}");
     }
 }
 
 /// Cygwin executables are PE files, loaded by the Windows loader like any other.
 #[test]
-fn cygwin_is_refused_with_the_reason() {
-    for env in ["", "gnu"] {
-        let message = hardens("cygwin", env).unwrap_err();
-        assert!(
-            message.contains("cygwin") && message.contains("DEPENDENTLOADFLAG"),
-            "{env}: {message}"
-        );
+fn cygwin_and_the_other_windows_targets_cannot_be_hardened() {
+    for (os, env) in [
+        ("cygwin", ""),
+        ("cygwin", "gnu"),
+        ("windows", "gnu"),
+        ("windows", "gnullvm"),
+        ("windows", ""),
+    ] {
+        assert_eq!(target_kind(os, env), TargetKind::Unhardenable, "{os}-{env}");
     }
 }
 
@@ -33,19 +38,41 @@ fn cygwin_is_refused_with_the_reason() {
 )]
 fn a_failed_initializer_compile_names_the_target_and_the_known_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let initializer = plan("windows", "msvc", dir.path()).unwrap().unwrap();
+    let Plan::Harden(initializer) = plan("windows", "msvc", dir.path()).unwrap() else {
+        panic!("windows-msvc is hardened");
+    };
     compile_initializer("no-such-target", Path::new("rustc"), &initializer);
 }
 
+/// `bins()` runs for a package built only as a dependency, where cargo never links its bins, so a target it cannot
+/// harden fails the bins' link and not the build script.
 #[test]
-fn windows_targets_other_than_msvc_are_refused_with_the_reason() {
-    for env in ["gnu", "gnullvm", ""] {
-        let message = hardens("windows", env).unwrap_err();
+fn a_target_that_cannot_be_hardened_fails_the_bins_link_and_says_why() {
+    for (os, env) in [
+        ("cygwin", ""),
+        ("windows", "gnu"),
+        ("windows", "gnullvm"),
+        ("windows", ""),
+    ] {
+        let Ok(Plan::FailBinsLink { warning }) = plan(os, env, Path::new("out")) else {
+            panic!("{os}-{env}: not a plan to fail the bins' link");
+        };
         assert!(
-            message.contains("only windows-msvc") && message.contains("DEPENDENTLOADFLAG"),
-            "{env}: {message}"
+            warning.contains(os) && warning.contains("DEPENDENTLOADFLAG") && warning.contains("README"),
+            "{os}-{env}: {warning}"
         );
     }
+}
+
+/// Cargo hides a dependency's `cargo:warning`, so the linker's own error, which quotes this argument, is all the
+/// reader of a failed build is sure to see. It must be rejected, not read as an option or a library name, and be one
+/// argument.
+#[test]
+fn the_link_argument_names_the_problem_and_is_one_input_file() {
+    assert!(UNHARDENABLE_LINK_ARG.contains("libsearch-guard-cannot-harden-this-target-see-README"));
+    assert!(!UNHARDENABLE_LINK_ARG.starts_with(['-', '@', '/']));
+    assert!(!UNHARDENABLE_LINK_ARG.contains(char::is_whitespace));
+    assert!(!Path::new(UNHARDENABLE_LINK_ARG).exists());
 }
 
 /// A value that is not valid Unicode, as Windows (unpaired surrogate) and Unix (invalid UTF-8) allow.
@@ -88,19 +115,24 @@ fn a_non_unicode_out_dir_is_refused_before_anything_is_compiled() {
 fn a_non_unicode_out_dir_does_not_matter_where_nothing_is_compiled() {
     let out_dir = PathBuf::from(not_unicode());
     for (os, env) in [("linux", "gnu"), ("macos", ""), ("freebsd", "")] {
-        assert!(matches!(plan(os, env, &out_dir), Ok(None)), "{os}-{env}");
+        assert!(matches!(plan(os, env, &out_dir), Ok(Plan::Skip)), "{os}-{env}");
     }
 }
 
 #[test]
-fn a_target_that_cannot_be_hardened_is_refused_whatever_out_dir_is() {
-    let message = plan("windows", "gnu", Path::new("out")).unwrap_err();
-    assert!(message.contains("only windows-msvc"), "{message}");
+fn a_target_that_cannot_be_hardened_does_not_need_a_unicode_out_dir() {
+    let out_dir = PathBuf::from(not_unicode());
+    assert!(matches!(
+        plan("windows", "gnu", &out_dir),
+        Ok(Plan::FailBinsLink { .. })
+    ));
 }
 
 #[test]
 fn the_source_and_the_object_go_in_out_dir() {
-    let initializer = plan("windows", "msvc", Path::new("out")).unwrap().unwrap();
+    let Plan::Harden(initializer) = plan("windows", "msvc", Path::new("out")).unwrap() else {
+        panic!("windows-msvc is hardened");
+    };
     assert_eq!(Path::new(&initializer.source).parent(), Some(Path::new("out")));
     assert_eq!(Path::new(&initializer.object).parent(), Some(Path::new("out")));
     assert_ne!(initializer.source, initializer.object);

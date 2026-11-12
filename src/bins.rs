@@ -7,6 +7,11 @@ use std::process::Command;
 #[path = "bins_tests.rs"]
 mod tests;
 
+/// The argument that fails the link of every `[[bin]]` on a target `bins()` cannot harden. It is a file that does
+/// not exist, which GNU ld and clang or lld alike reject, naming the file; cargo hides a dependency's
+/// `cargo:warning`, so this name is what the reader of a failed build sees.
+const UNHARDENABLE_LINK_ARG: &str = "libsearch-guard-cannot-harden-this-target-see-README";
+
 /// Source of the pre-`main` initializer.
 const INITIALIZER: &str = include_str!("../initializer/pre_main.rs");
 
@@ -53,9 +58,11 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 ///
 /// "Every `[[bin]]`" includes each bin's own unit-test and bench harness, which is the bin's code. The
-/// package's library, integration tests, examples and `cdylib`s are not affected. On a target that is not
-/// Windows, this does nothing. On a Windows target that is not MSVC, or on Cygwin, it fails the build (see
-/// Panics).
+/// package's library, examples and `cdylib`s are not affected. On a target that is not Windows, this does
+/// nothing. On a Windows target that is not MSVC, or on Cygwin, it does not panic: it prints a `cargo:warning`
+/// and fails the link of every `[[bin]]`, so the package's library still builds, and so does a package that
+/// depends on it, where cargo never links its bins. An integration test of a package with a `[[bin]]` fails too,
+/// because cargo links the bins first.
 ///
 /// `+crt-static` is detected through the target features cargo reports to the build script: `RUSTFLAGS` and
 /// the target config set them, but `cargo rustc -- -C target-feature=+crt-static` reaches the final crate
@@ -66,8 +73,6 @@ const WANTED_RUNTIME_LIBS: [&str; 3] = ["libcmt.lib", "libvcruntime.lib", "ucrt.
 /// # Panics
 ///
 /// - If it is not called from a build script.
-/// - On a Windows target that is not `*-windows-msvc`, or on Cygwin (whose executables are PE files loaded by
-///   the Windows loader): GNU ld has no `DEPENDENTLOADFLAG`, so the bins cannot be hardened.
 /// - On a target it hardens, if `OUT_DIR` is not valid Unicode: rustc and the linker take only Unicode paths. It
 ///   is refused before anything is compiled.
 /// - If compiling the initializer fails (rustc's error is printed above the panic). A target with no prebuilt
@@ -79,8 +84,13 @@ pub fn bins() {
         &var("CARGO_CFG_TARGET_ENV"),
         Path::new(&out_dir),
     ) {
-        Ok(Some(initializer)) => initializer,
-        Ok(None) => return,
+        Ok(Plan::Harden(initializer)) => initializer,
+        Ok(Plan::Skip) => return,
+        Ok(Plan::FailBinsLink { warning }) => {
+            println!("cargo:warning={warning}");
+            println!("cargo:rustc-link-arg-bins={UNHARDENABLE_LINK_ARG}");
+            return;
+        }
         Err(message) => panic!("libsearch-guard: {message}"),
     };
     compile_initializer(&var("TARGET"), Path::new(&var_os("RUSTC")), &initializer);
@@ -97,19 +107,23 @@ pub fn bins() {
     println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
 }
 
-/// Whether `bins()` hardens a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`. An error is
-/// a Windows target it cannot harden.
-fn hardens(os: &str, env: &str) -> Result<bool, String> {
+/// How `bins()` treats a target, from its `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`.
+#[derive(Debug, PartialEq, Eq)]
+enum TargetKind {
+    /// `windows` + `msvc`: hardened.
+    Msvc,
+    /// Another Windows target, or Cygwin (whose executables are PE files loaded by the Windows loader): the
+    /// loader searches the executable's folder and GNU ld has no `DEPENDENTLOADFLAG`.
+    Unhardenable,
+    /// Not Windows: the loader's behaviour is already right, and `verify` checks it.
+    Elsewhere,
+}
+
+fn target_kind(os: &str, env: &str) -> TargetKind {
     match (os, env) {
-        ("windows", "msvc") => Ok(true),
-        ("windows", _) => Err(format!(
-            "only windows-msvc is supported on Windows (this target's env is {env:?}): GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
-        )),
-        ("cygwin", _) => Err(
-            "cygwin is not supported: its executables are PE files loaded by the Windows loader, and GNU ld has no DEPENDENTLOADFLAG, so its bins cannot be hardened (see the README, Platform notes)"
-                .into(),
-        ),
-        _ => Ok(false),
+        ("windows", "msvc") => TargetKind::Msvc,
+        ("windows" | "cygwin", _) => TargetKind::Unhardenable,
+        _ => TargetKind::Elsewhere,
     }
 }
 
@@ -121,12 +135,33 @@ struct Initializer {
     object: String,
 }
 
+/// What `bins()` does for a target.
+#[derive(Debug)]
+enum Plan {
+    /// Compile the initializer and link it, with the other arguments, into every bin.
+    Harden(Initializer),
+    /// Do nothing.
+    Skip,
+    /// Print `warning` and fail the link of every bin: the target cannot be hardened, and a bin that looks
+    /// hardened and is not is worse than none.
+    FailBinsLink { warning: String },
+}
+
 /// What `bins()` does for a target with this `CARGO_CFG_TARGET_OS` and `CARGO_CFG_TARGET_ENV`, building in
-/// `out_dir`: nothing, or compile the initializer. An error is a target it cannot harden, or an `out_dir` that
-/// is not Unicode; it is reached before anything is compiled.
-fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Option<Initializer>, String> {
-    if !hardens(os, env)? {
-        return Ok(None);
+/// `out_dir`. An error is an `out_dir` that is not Unicode on a target it hardens; it is reached before anything
+/// is compiled.
+fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Plan, String> {
+    match target_kind(os, env) {
+        TargetKind::Elsewhere => return Ok(Plan::Skip),
+        TargetKind::Unhardenable => {
+            // The cfg values, not a triple: `*-windows-gnullvm` reports `target_env = "gnu"`.
+            return Ok(Plan::FailBinsLink {
+                warning: format!(
+                    "target_os = {os:?}, target_env = {env:?} cannot be hardened (GNU ld has no DEPENDENTLOADFLAG, and the loader still searches the executable's folder), so linking every [[bin]] of this package fails; the library still builds (see the README, Platform notes)"
+                ),
+            });
+        }
+        TargetKind::Msvc => {}
     }
     let unicode_path = |name: &str| {
         let path = out_dir.join(name);
@@ -137,7 +172,7 @@ fn plan(os: &str, env: &str, out_dir: &Path) -> Result<Option<Initializer>, Stri
             )
         })
     };
-    Ok(Some(Initializer {
+    Ok(Plan::Harden(Initializer {
         source: unicode_path("libsearch_guard_pre_main.rs")?,
         object: unicode_path("libsearch_guard_pre_main.obj")?,
     }))

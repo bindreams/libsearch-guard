@@ -42,7 +42,7 @@ Code that runs before the guard, where a `LoadLibrary` call without flags is not
 - the CRT's own start-up code, and every `.CRT$XI*` initializer that sorts at or before `.CRT$XIAB`: the CRT's `.CRT$XIAA` ones, and any object's `XIAA`, `XIA0` and the like;
 - the loader's resolution of the executable's import table, which `/DEPENDENTLOADFLAG` covers.
 
-On targets that are not Windows, `bins()` does nothing: the loader searches the executable's folder only when the binary asks, and `verify` checks that it has not. Other Windows targets and Cygwin are refused: see Platform notes.
+On targets that are not Windows, `bins()` does nothing: the loader searches the executable's folder only when the binary asks, and `verify` checks that it has not. On other Windows targets and on Cygwin it fails the link of every `[[bin]]`: see Platform notes.
 
 ## Loading a sidecar DLL
 
@@ -72,7 +72,7 @@ ELF files are read through their `PT_DYNAMIC` segment, not the section headers, 
 
 ## Platform notes
 
-- **Windows targets other than MSVC** (`windows-gnu`, `windows-gnullvm`) **and Cygwin** (`target_os = "cygwin"`, whose executables are PE files loaded by the Windows loader): `bins()` fails the build. GNU ld has no `DEPENDENTLOADFLAG`, and the loader on those targets still searches the executable's folder, so the crate refuses rather than build a bin that looks hardened and is not. There is no switch to skip it.
+- **Windows targets other than MSVC** (`windows-gnu`, `windows-gnullvm`, whose `target_env` is `gnu`) **and Cygwin** (`target_os = "cygwin"`, whose executables are PE files loaded by the Windows loader): `bins()` does not panic. It prints a `cargo:warning` and fails the link of every `[[bin]]` of the package, with an error that names `libsearch-guard-cannot-harden-this-target-see-README`; the library and its examples still build, and so does a package that depends on the library, since cargo never links a dependency's bins. An integration test of a package that has a `[[bin]]` fails too, because cargo links the bins before it. GNU ld has no `DEPENDENTLOADFLAG`, and the loader on those targets still searches the executable's folder, so the crate refuses to link a bin that looks hardened and is not. There is no switch to skip it.
 - **MSVC targets without a prebuilt `core`** (tier 3 targets, `-Zbuild-std`): `bins()` fails the build. The initializer is compiled with the build's own `rustc` against the target's prebuilt `core`.
 - **`+crt-static` passed only to the final crate**: `bins()` detects `+crt-static` through the target features cargo reports to the build script, which `RUSTFLAGS` and the target config set. `cargo rustc -- -C target-feature=+crt-static` reaches the final crate only and is not seen: the static-CRT link arguments are then emitted and make the Universal CRT dynamic.
 - The library itself is not hardened: it ships no initializer and links no runtime tricks, so depending on it for `verify` changes nothing about the tests that use it.
