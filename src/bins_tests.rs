@@ -88,12 +88,18 @@ fn a_variable_that_is_not_unicode_is_not_called_unset() {
     unicode("TARGET", not_unicode());
 }
 
-/// `OUT_DIR`s that cannot go into a `cargo:` line, each with the part of the refusal that names its cause: rustc
-/// takes only Unicode arguments, and a `\n` ends the line.
-fn unusable_out_dirs() -> [(PathBuf, &'static str); 2] {
+/// `OUT_DIR`s that cannot go into a `cargo:` line, each with the cause and the remedy its refusal names: rustc
+/// takes only Unicode arguments, and a line break splits the line.
+fn unusable_out_dirs() -> [(PathBuf, &'static str, &'static str); 3] {
+    let line_break = ("contains a line break", "no line break in its path");
     [
-        (PathBuf::from(not_unicode()), "is not valid Unicode"),
-        (PathBuf::from("my\nout"), "contains a line break"),
+        (
+            PathBuf::from(not_unicode()),
+            "is not valid Unicode",
+            "with a Unicode path",
+        ),
+        (PathBuf::from("my\nout"), line_break.0, line_break.1),
+        (PathBuf::from("my\rout"), line_break.0, line_break.1),
     ]
 }
 
@@ -101,29 +107,20 @@ fn unusable_out_dirs() -> [(PathBuf, &'static str); 2] {
 /// path in it. Either way the decision refuses it, before rustc runs.
 #[test]
 fn an_unusable_out_dir_is_refused_before_anything_is_compiled() {
-    for (out_dir, cause) in unusable_out_dirs() {
+    for (out_dir, cause, remedy) in unusable_out_dirs() {
         for (os, env) in [("windows", "msvc")].into_iter().chain(UNHARDENABLE) {
             let message = plan(os, env, &out_dir).unwrap_err();
             assert!(
-                message.contains(cause) && message.contains("use a target directory with"),
+                message.contains(cause) && message.contains(remedy),
                 "{os}-{env}, {out_dir:?}: {message}"
             );
         }
     }
 }
 
-/// A `\r` does not end a `cargo:` line: cargo splits build-script output on `\n` only.
-#[test]
-fn a_carriage_return_in_out_dir_is_not_refused() {
-    assert!(matches!(
-        plan("windows", "gnu", Path::new("my\rout")),
-        Ok(Plan::FailBinsLink { .. })
-    ));
-}
-
 #[test]
 fn an_unusable_out_dir_does_not_matter_where_nothing_is_compiled() {
-    for (out_dir, _) in unusable_out_dirs() {
+    for (out_dir, _, _) in unusable_out_dirs() {
         for (os, env) in [("linux", "gnu"), ("macos", ""), ("freebsd", "")] {
             assert!(
                 matches!(plan(os, env, &out_dir), Ok(Plan::Skip)),
