@@ -14,18 +14,25 @@ pub struct Pe<'a> {
     pub load_config: Option<(u16, u32)>,
 }
 
-/// How a crafted image differs from the default: a 64-bit executable (PE32+, x86-64) that carries the
-/// initializer's marker and whose section data is all in the file.
+/// Word size of a crafted image.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum Bits {
+    /// PE32, x86.
+    B32,
+    /// PE32+, x86-64.
+    #[default]
+    B64,
+}
+
+/// How a crafted image differs from the default: a 64-bit executable (PE32+, x86-64) with the section the
+/// initializer's object contributes.
 #[derive(Default)]
 pub struct Variant {
-    /// PE32, x86.
-    pub pe32: bool,
-    /// Without the marker: the initializer is not linked.
-    pub no_marker: bool,
+    pub bits: Bits,
+    /// Without the initializer's section: the initializer is not linked.
+    pub no_initializer: bool,
     /// A DLL: `IMAGE_FILE_DLL` is set in the COFF characteristics.
     pub dll: bool,
-    /// A second section whose data lies beyond the end of the file.
-    pub broken_section: bool,
 }
 
 /// A 64-bit executable.
@@ -38,20 +45,10 @@ pub fn pe32(spec: &Pe) -> Vec<u8> {
     pe_variant(
         spec,
         &Variant {
-            pe32: true,
+            bits: Bits::B32,
             ..Variant::default()
         },
     )
-}
-
-pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
-    pe_image(spec, variant)
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Bits {
-    B32,
-    B64,
 }
 
 /// Where `DependentLoadFlags` is in the load config directory, from the `IMAGE_LOAD_CONFIG_DIRECTORY` layouts in
@@ -64,8 +61,8 @@ fn dependent_load_flags_at(bits: Bits) -> usize {
     }
 }
 
-fn pe_image(spec: &Pe, variant: &Variant) -> Vec<u8> {
-    let bits = if variant.pe32 { Bits::B32 } else { Bits::B64 };
+pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
+    let bits = variant.bits;
     const SECTION_RVA: u32 = 0x1000;
     const SECTION_FILE: usize = 0x200;
     let thunk_size = if bits == Bits::B64 { 8 } else { 4 };
@@ -133,11 +130,6 @@ fn pe_image(spec: &Pe, variant: &Variant) -> Vec<u8> {
         );
     }
 
-    if !variant.no_marker {
-        sec.resize(sec.len().next_multiple_of(8), 0);
-        sec.extend_from_slice(&crate::verify::pe::marker());
-    }
-
     let mut load_dir = (0u32, 0u32);
     if let Some((flags, size)) = spec.load_config {
         sec.resize(sec.len().next_multiple_of(8), 0);
@@ -166,7 +158,7 @@ fn pe_image(spec: &Pe, variant: &Variant) -> Vec<u8> {
     if variant.dll {
         characteristics |= 0x2000; // IMAGE_FILE_DLL
     }
-    let sections = if variant.broken_section { 2u16 } else { 1 };
+    let sections = if variant.no_initializer { 1u16 } else { 2 };
     img.extend_from_slice(&sections.to_le_bytes());
     img.extend_from_slice(&[0u8; 12]); // timestamp, symbol table, symbol count
     img.extend_from_slice(&optional_size.to_le_bytes());
@@ -184,7 +176,13 @@ fn pe_image(spec: &Pe, variant: &Variant) -> Vec<u8> {
     }
     opt[32..36].copy_from_slice(&0x1000u32.to_le_bytes()); // SectionAlignment
     opt[36..40].copy_from_slice(&0x200u32.to_le_bytes()); // FileAlignment
-    opt[56..60].copy_from_slice(&(SECTION_RVA + section_size as u32).to_le_bytes()); // SizeOfImage
+    let guard_rva = SECTION_RVA + section_size as u32;
+    let image_end = if variant.no_initializer {
+        guard_rva
+    } else {
+        guard_rva + 0x1000
+    };
+    opt[56..60].copy_from_slice(&image_end.to_le_bytes()); // SizeOfImage
     opt[60..64].copy_from_slice(&0x200u32.to_le_bytes()); // SizeOfHeaders
     opt[68..70].copy_from_slice(&3u16.to_le_bytes()); // console subsystem
     opt[data_dirs_at - 4..data_dirs_at].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
@@ -205,17 +203,21 @@ fn pe_image(spec: &Pe, variant: &Variant) -> Vec<u8> {
     header[20..24].copy_from_slice(&(SECTION_FILE as u32).to_le_bytes());
     header[36..40].copy_from_slice(&0x4000_0040u32.to_le_bytes()); // readable initialized data
     img.extend_from_slice(&header);
-    if variant.broken_section {
+    if !variant.no_initializer {
         let mut header = [0u8; 40];
-        header[..5].copy_from_slice(b".data");
+        header[..8].copy_from_slice(b".lsguard"); // all 8 bytes of the name field
         header[8..12].copy_from_slice(&0x200u32.to_le_bytes()); // VirtualSize
-        header[12..16].copy_from_slice(&(SECTION_RVA + section_size as u32).to_le_bytes());
+        header[12..16].copy_from_slice(&guard_rva.to_le_bytes());
         header[16..20].copy_from_slice(&0x200u32.to_le_bytes()); // SizeOfRawData
-        header[20..24].copy_from_slice(&0x10_0000u32.to_le_bytes()); // far beyond the end of the file
-        header[36..40].copy_from_slice(&0xC000_0040u32.to_le_bytes()); // readable, writable initialized data
+        header[20..24].copy_from_slice(&((SECTION_FILE + section_size) as u32).to_le_bytes());
+        header[36..40].copy_from_slice(&0x4000_0040u32.to_le_bytes()); // readable initialized data
         img.extend_from_slice(&header);
     }
     img.resize(SECTION_FILE, 0);
     img.extend_from_slice(&sec);
+    if !variant.no_initializer {
+        img.resize(SECTION_FILE + section_size, 0);
+        img.extend_from_slice(&[1u8; 0x200]);
+    }
     img
 }

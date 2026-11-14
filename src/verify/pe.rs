@@ -1,5 +1,5 @@
 //! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32` and no bit outside it
-//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, an executable carries the marker of the pre-`main` initializer (a DLL
+//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, an executable has the section of the pre-`main` initializer's object (a DLL
 //! never does), and no Visual C++ redistributable DLL is imported, in the import table or the delay-load import
 //! table.
 
@@ -11,8 +11,8 @@ use object::{LittleEndian as LE, Object, ObjectSection};
 
 use super::{unreadable, Violation, ViolationKind};
 
-// `MARKER_KEY` and `ENCODED_MARKER`: the one definition `bins()` also compiles into the initializer.
-include!("../../initializer/marker.rs");
+/// The section the initializer's object defines (`initializer/pre_main.rs`). The name is the whole 8-byte field.
+const INITIALIZER_SECTION: &[u8] = b".lsguard";
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
 /// `LOAD_LIBRARY_SEARCH_USER_DIRS`: it adds only the directories registered with `AddDllDirectory`, and none is
@@ -201,10 +201,10 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         .characteristics
         .get(LE)
         .contains(IMAGE_FILE_DLL);
-    if !is_dll && !has_marker(&file).map_err(unreadable)? {
+    if !is_dll && !has_initializer_section(&file) {
         out.push(Violation {
             kind: ViolationKind::PeInitializer,
-            detail: "does not carry the marker of the pre-main initializer that bins() links in, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
+            detail: "has no `.lsguard` section, which the pre-main initializer that bins() links in contributes, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
         });
     }
 
@@ -234,34 +234,14 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
     Ok(())
 }
 
-/// Whether a section of the image holds the initializer's marker.
+/// Whether the image has the initializer's section.
 ///
-/// The marker is in the object that holds the initializer, so a binary has it exactly when the initializer was
-/// linked. The `.CRT$XIAB` entry itself is merged into `.rdata`, and a release binary has no symbols, so neither
-/// shows it.
-fn has_marker<'data, Pe: ImageNtHeaders>(file: &PeFile<'data, Pe, &'data [u8]>) -> object::Result<bool> {
-    for section in file.sections() {
-        if contains_marker(section.data()?) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Whether `data` has the marker in it. It is compared in its encoded form: the text is never assembled here.
-fn contains_marker(data: &[u8]) -> bool {
-    data.windows(ENCODED_MARKER.len()).any(|window| {
-        window
-            .iter()
-            .zip(ENCODED_MARKER)
-            .all(|(byte, encoded)| byte ^ MARKER_KEY == *encoded)
-    })
-}
-
-/// The marker as the initializer holds it, for the tests that build an image that has it.
-#[cfg(test)]
-pub(super) fn marker() -> Vec<u8> {
-    ENCODED_MARKER.iter().map(|byte| byte ^ MARKER_KEY).collect()
+/// The object that holds the initializer also defines the section, so an image has it exactly when the initializer
+/// was linked. The `.CRT$XIAB` entry itself is merged into `.rdata`, and a release binary has no symbols, so
+/// neither shows it; the section table always does. Only the name is read: a section's data is not.
+fn has_initializer_section<'data, Pe: ImageNtHeaders>(file: &PeFile<'data, Pe, &'data [u8]>) -> bool {
+    file.sections()
+        .any(|section| section.name_bytes() == Ok(INITIALIZER_SECTION))
 }
 
 /// `DependentLoadFlags` from the load config directory, or 0 where the directory is absent or too short to

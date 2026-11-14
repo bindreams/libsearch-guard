@@ -1,4 +1,4 @@
-use super::crafted::{pe, pe32, pe_variant, Pe, Variant};
+use super::crafted::{pe, pe32, pe_variant, Bits, Pe, Variant};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -321,7 +321,7 @@ fn every_violation_is_reported_not_only_the_first() {
             delay_imports: &[],
             load_config: None,
         },
-        &no_marker(),
+        &no_initializer(),
     );
     assert_eq!(
         kinds(&image),
@@ -334,9 +334,9 @@ fn every_violation_is_reported_not_only_the_first() {
     );
 }
 
-fn no_marker() -> Variant {
+fn no_initializer() -> Variant {
     Variant {
-        no_marker: true,
+        no_initializer: true,
         ..Variant::default()
     }
 }
@@ -349,26 +349,27 @@ fn hardened_spec() -> Pe<'static> {
     }
 }
 
-/// The initializer's object carries the marker, so an image without it has lost the initializer, whatever its
-/// load flags say, and whatever it imports: a dependency that calls `SetDefaultDllDirectories` does not stand in.
+/// The initializer's object contributes the `.lsguard` section, so an image without it has lost the initializer,
+/// whatever its load flags say, and whatever it imports: a dependency that calls `SetDefaultDllDirectories` does
+/// not stand in.
 #[test]
-fn an_image_without_the_marker_is_reported() {
+fn an_image_without_the_initializers_section_is_reported() {
     for imports in [&[KERNEL32][..], &[], &["KERNEL32.dll!SetDefaultDllDirectories"]] {
         let spec = Pe {
             imports,
             ..hardened_spec()
         };
         assert_eq!(
-            kinds(&pe_variant(&spec, &no_marker())),
+            kinds(&pe_variant(&spec, &no_initializer())),
             vec![ViolationKind::PeInitializer],
             "{imports:?}"
         );
     }
 }
 
-/// Whatever else the image imports, the marker is what shows the initializer.
+/// Whatever else the image imports, the section is what shows the initializer.
 #[test]
-fn an_image_with_the_marker_passes_whatever_it_imports() {
+fn an_image_with_the_initializers_section_passes_whatever_it_imports() {
     let spec = Pe {
         imports: &[
             "USER32.dll",
@@ -379,13 +380,31 @@ fn an_image_with_the_marker_passes_whatever_it_imports() {
     assert_eq!(kinds(&pe(&spec)), vec![]);
 }
 
+/// Only the section's name shows the initializer: the same text in another section's data, as in an executable
+/// that embeds a hardened one, and a name that differs in its last byte do not.
+#[test]
+fn only_a_section_of_exactly_that_name_shows_the_initializer() {
+    let rename = |image: &mut Vec<u8>, from: &[u8], to: &[u8]| {
+        let at = image.windows(from.len()).position(|window| window == from).unwrap();
+        image[at..at + to.len()].copy_from_slice(to);
+    };
+    let mut lookalike = pe(&hardened_spec());
+    rename(&mut lookalike, b".lsguard", b".lsguarX");
+    assert_eq!(kinds(&lookalike), vec![ViolationKind::PeInitializer]);
+
+    let mut embedded = pe_variant(&hardened_spec(), &no_initializer());
+    let at = embedded.len() - 0x10;
+    embedded[at..at + 8].copy_from_slice(b".lsguard");
+    assert_eq!(kinds(&embedded), vec![ViolationKind::PeInitializer]);
+}
+
 /// A DLL never carries the initializer (it must not change the process's search order), so the check does not
 /// apply to it; the other rules do.
 #[test]
-fn a_dll_without_the_marker_is_not_reported_for_it() {
+fn a_dll_without_the_initializer_is_not_reported_for_it() {
     let dll = Variant {
         dll: true,
-        ..no_marker()
+        ..no_initializer()
     };
     assert_eq!(kinds(&pe_variant(&hardened_spec(), &dll)), vec![]);
     let flags_missing = Pe {
@@ -403,40 +422,6 @@ fn a_dll_without_the_marker_is_not_reported_for_it() {
     assert_eq!(kinds(&pe_variant(&runtime, &dll)), vec![ViolationKind::PeRuntimeImport]);
 }
 
-/// An unreadable section stops the search for the marker; what was found before it is kept.
-#[test]
-fn violations_found_before_an_unreadable_section_are_kept() {
-    let spec = Pe {
-        load_config: Some((0x400, FULL)),
-        ..hardened_spec()
-    };
-    let image = pe_variant(
-        &spec,
-        &Variant {
-            broken_section: true,
-            ..no_marker()
-        },
-    );
-    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
-        panic!("an unreadable section was not reported");
-    };
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
-}
-
-/// A section that is not readable does not hide a marker found in one that is.
-#[test]
-fn a_marker_in_a_readable_section_passes_next_to_an_unreadable_one() {
-    let image = pe_variant(
-        &hardened_spec(),
-        &Variant {
-            broken_section: true,
-            ..Variant::default()
-        },
-    );
-    assert_eq!(kinds(&image), vec![]);
-}
-
 #[test]
 fn a_pe32_without_the_initializer_is_reported() {
     let image = pe_variant(
@@ -446,8 +431,8 @@ fn a_pe32_without_the_initializer_is_reported() {
             load_config: Some((0x800, FULL32)),
         },
         &Variant {
-            pe32: true,
-            ..no_marker()
+            bits: Bits::B32,
+            ..no_initializer()
         },
     );
     assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer]);

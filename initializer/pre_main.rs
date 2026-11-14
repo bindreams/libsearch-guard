@@ -89,18 +89,10 @@ unsafe extern "C" fn initialize() -> i32 {
 #[link_section = ".CRT$XIAB"]
 static INITIALIZER: unsafe extern "C" fn() -> i32 = initialize;
 
-const fn decode_marker() -> [u8; ENCODED_MARKER.len()] {
-    let mut marker = [0u8; ENCODED_MARKER.len()];
-    let mut i = 0;
-    while i < marker.len() {
-        marker[i] = ENCODED_MARKER[i] ^ MARKER_KEY;
-        i += 1;
-    }
-    marker
-}
-
-/// What `verify` finds in a binary to know that this object was linked: it is in the same object as the
-/// `.CRT$XIAB` entry, and `#[used]` keeps it through `/OPT:REF` and `/OPT:ICF`, so it is linked exactly when the
-/// initializer is. Nothing refers to it.
+/// The section `verify` looks for in an executable to know that this object was linked: it is defined in the same
+/// object as the `.CRT$XIAB` entry, and `#[used]` keeps it through `/OPT:REF` and `/OPT:ICF`, so the image has a
+/// section of this name exactly when the initializer was linked. Nothing refers to it. The name is the whole 8-byte
+/// field of a PE section header.
 #[used]
-static MARKER: [u8; ENCODED_MARKER.len()] = decode_marker();
+#[link_section = ".lsguard"]
+static LINKED: [u8; 1] = [1];
