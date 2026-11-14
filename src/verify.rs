@@ -89,8 +89,8 @@ pub enum VerifyError {
     Unreadable {
         /// What could not be read.
         why: String,
-        /// The violations found before the unreadable part; each keeps its kind. A PE is checked part by part, and
-        /// every part that can be read is, so these are all the violations the readable parts have.
+        /// The violations found; each keeps its kind. A PE's checks all run, each stopping at the first entry of its
+        /// own part it cannot read; an ELF or Mach-O file is checked up to the unreadable part.
         found: Vec<Violation>,
     },
     /// The file breaks one or more rules; every violation found is listed, in no specified order.
@@ -162,7 +162,7 @@ fn verify_bytes(data: &[u8]) -> Result<(), VerifyError> {
     match check(data, &mut violations) {
         Ok(()) if violations.is_empty() => Ok(()),
         Ok(()) => Err(VerifyError::Violations(violations)),
-        // What was found before the unreadable part is not lost.
+        // What was found is not lost.
         Err(VerifyError::Unreadable { why, .. }) => Err(VerifyError::Unreadable { why, found: violations }),
         Err(error) => Err(error),
     }

@@ -447,8 +447,7 @@ fn without_the_initializers_section_a_section_name_that_cannot_be_read_is_unread
     }
 }
 
-/// The section check runs after the import scans, so a name that cannot be read never hides a runtime import
-/// that can be.
+/// The checks are independent, so a section name that cannot be read never hides a runtime import that can be.
 #[test]
 fn a_section_name_that_cannot_be_read_does_not_hide_a_runtime_import() {
     let spec = Pe {
@@ -494,8 +493,8 @@ fn violations_found_before_an_unreadable_import_table_are_kept() {
     assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
 }
 
-/// The checks are independent: a part that cannot be read hides neither what the other checks find, nor what was
-/// read of its own table before the failure. The first unreadable part is the error, with every violation kept.
+/// The checks are independent: a part that cannot be read does not hide what the other checks find. The first
+/// unreadable part is the error, with every violation kept.
 fn unreadable_found(spec: &Pe, variant: &Variant) -> (String, Vec<ViolationKind>) {
     match verify_bytes(&pe_variant(spec, variant)) {
         Err(VerifyError::Unreadable { why, found }) => (why, found.into_iter().map(|v| v.kind).collect()),
