@@ -113,7 +113,7 @@ impl fmt::Display for VerifyError {
             VerifyError::Unreadable { why, found } => {
                 write!(f, "cannot read the executable: {why}")?;
                 if !found.is_empty() {
-                    write!(f, "; found before that:")?;
+                    write!(f, "; also found:")?;
                     for v in found {
                         write!(
                             f,
