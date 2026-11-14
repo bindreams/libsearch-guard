@@ -12,10 +12,10 @@ Linux and macOS search the executable's folder only when the binary asks for it:
 
 ```toml
 [build-dependencies]
-libsearch-guard = "0.1"
+libsearch-guard = "0.2"
 
 [dev-dependencies]
-libsearch-guard = "0.1"  # only for `verify`
+libsearch-guard = "0.2"  # only for `verify`
 ```
 
 ```rust
