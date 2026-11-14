@@ -84,14 +84,16 @@ pub enum VerifyError {
     /// The file is not a PE, ELF or Mach-O executable this crate can read, a slice of a universal binary is not a
     /// Mach-O image, or a part of it (a library path, say) is not valid UTF-8, so a check could not be made. A
     /// PE section name that cannot be read (a long name into a string table the image does not have) is such a part
-    /// only where no section is named `.lsguard`: it could have been that one.
+    /// only in an executable (a DLL is not checked for the initializer) with no section named `.lsguard`: the
+    /// name could have been that one.
     Unreadable {
         /// What could not be read.
         why: String,
-        /// The violations found before the unreadable part; each keeps its kind.
+        /// The violations found before the unreadable part; each keeps its kind. A PE is checked part by part, and
+        /// every part that can be read is, so these are all the violations the readable parts have.
         found: Vec<Violation>,
     },
-    /// The file breaks one or more rules; every violation found is listed.
+    /// The file breaks one or more rules; every violation found is listed, in no specified order.
     Violations(Vec<Violation>),
 }
 

@@ -422,14 +422,15 @@ fn a_section_name_that_cannot_be_read_does_not_hide_the_initializers_section() {
 }
 
 /// Without `.lsguard`, a name that cannot be read could have been it: the image is unreadable, not reported for
-/// lacking the initializer, and what was found before is kept. The error says which section, and why it matters.
+/// lacking the initializer, and what was found before is kept. The error names the section by its name field,
+/// and says why it matters.
 #[test]
 fn without_the_initializers_section_a_section_name_that_cannot_be_read_is_unreadable() {
     let spec = Pe {
         load_config: None,
         ..hardened_spec()
     };
-    for (name, index) in [(BrokenName::Before, 0), (BrokenName::After, 1)] {
+    for name in BROKEN_NAMES {
         let variant = Variant {
             no_initializer: true,
             ..broken(name)
@@ -442,10 +443,7 @@ fn without_the_initializers_section_a_section_name_that_cannot_be_read_is_unread
             vec![ViolationKind::PeDependentLoadFlags],
             "{name:?}"
         );
-        assert!(
-            why.contains(&format!("section {index}")) && why.contains("initializer"),
-            "{name:?}: {why}"
-        );
+        assert!(why.contains("`/99`") && why.contains("initializer"), "{name:?}: {why}");
     }
 }
 
@@ -494,6 +492,56 @@ fn violations_found_before_an_unreadable_import_table_are_kept() {
     };
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
+}
+
+/// The checks are independent: a part that cannot be read hides neither what the other checks find, nor what was
+/// read of its own table before the failure. The first unreadable part is the error, with every violation kept.
+fn unreadable_found(spec: &Pe, variant: &Variant) -> (String, Vec<ViolationKind>) {
+    match verify_bytes(&pe_variant(spec, variant)) {
+        Err(VerifyError::Unreadable { why, found }) => (why, found.into_iter().map(|v| v.kind).collect()),
+        other => panic!("not unreadable: {other:?}"),
+    }
+}
+
+#[test]
+fn an_unreadable_load_config_hides_neither_a_runtime_import_nor_the_missing_initializer() {
+    let spec = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    let variant = Variant {
+        unreadable_load_config: true,
+        ..no_initializer()
+    };
+    let (_, found) = unreadable_found(&spec, &variant);
+    assert_eq!(
+        found,
+        vec![ViolationKind::PeRuntimeImport, ViolationKind::PeInitializer]
+    );
+}
+
+#[test]
+fn an_unreadable_import_table_does_not_hide_the_missing_initializer() {
+    let variant = Variant {
+        unreadable_import_table: true,
+        ..no_initializer()
+    };
+    let (_, found) = unreadable_found(&hardened_spec(), &variant);
+    assert_eq!(found, vec![ViolationKind::PeInitializer]);
+}
+
+#[test]
+fn an_unreadable_delay_load_table_keeps_the_runtime_imports_already_read() {
+    let spec = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    let variant = Variant {
+        unreadable_delay_table: true,
+        ..Variant::default()
+    };
+    let (_, found) = unreadable_found(&spec, &variant);
+    assert_eq!(found, vec![ViolationKind::PeRuntimeImport]);
 }
 
 /// A DLL never carries the initializer (it must not change the process's search order), so the check does not

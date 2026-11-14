@@ -40,6 +40,10 @@ pub struct Variant {
     pub broken_name: Option<BrokenName>,
     /// The import directory's RVA is outside the image, so the import table cannot be read.
     pub unreadable_import_table: bool,
+    /// The load config directory's RVA is outside the image, so `DependentLoadFlags` cannot be read.
+    pub unreadable_load_config: bool,
+    /// The delay-load import directory's RVA is outside the image, so the delay-load table cannot be read.
+    pub unreadable_delay_table: bool,
 }
 
 /// Which section of a crafted image has a name that cannot be read.
@@ -221,8 +225,24 @@ pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
             import_dir
         },
     );
-    dir(&mut opt, 10, load_dir);
-    dir(&mut opt, 13, delay_dir);
+    dir(
+        &mut opt,
+        10,
+        if variant.unreadable_load_config {
+            (0x00F0_0000, 0x100)
+        } else {
+            load_dir
+        },
+    );
+    dir(
+        &mut opt,
+        13,
+        if variant.unreadable_delay_table {
+            (0x00F0_0000, 32)
+        } else {
+            delay_dir
+        },
+    );
     img.extend_from_slice(&opt);
     // Section headers.
     let mut header = [0u8; 40];
