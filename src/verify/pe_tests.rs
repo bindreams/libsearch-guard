@@ -9,12 +9,15 @@ fn kinds(image: &[u8]) -> Vec<ViolationKind> {
     }
 }
 
+/// A system import that is also the one call the initializer makes, so an image that imports it has the initializer.
+const KERNEL32: &str = "KERNEL32.dll!SetDefaultDllDirectories";
+
 const FULL: u32 = size_of::<object::pe::ImageLoadConfigDirectory64>() as u32;
 
 #[test]
 fn hardened_pe_passes() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"],
+        imports: &[KERNEL32, "api-ms-win-crt-runtime-l1-1-0.dll"],
         delay_imports: &[],
         load_config: Some((0x800, FULL)),
     });
@@ -26,7 +29,7 @@ fn hardened_pe_passes() {
 #[test]
 fn flags_that_add_the_user_dirs_to_system32_pass() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: Some((0x800 | 0x400, FULL)),
     });
@@ -45,7 +48,7 @@ fn flags_that_search_the_executables_folder_are_reported_even_with_system32() {
         0x800 | 0x100 | 0x200 | 0x1000,
     ] {
         let image = pe(&Pe {
-            imports: &["KERNEL32.dll"],
+            imports: &[KERNEL32],
             delay_imports: &[],
             load_config: Some((flags, FULL)),
         });
@@ -65,7 +68,7 @@ fn a_flag_bit_outside_the_allowlist_is_reported_and_named() {
         (0x8800, "0x8000"),
     ] {
         let image = pe(&Pe {
-            imports: &["KERNEL32.dll"],
+            imports: &[KERNEL32],
             delay_imports: &[],
             load_config: Some((flags, FULL)),
         });
@@ -86,7 +89,7 @@ fn a_flag_bit_outside_the_allowlist_is_reported_and_named() {
 fn system32_with_the_user_dirs_is_the_only_extra_that_passes() {
     for flags in [0x800, 0xC00] {
         let image = pe(&Pe {
-            imports: &["KERNEL32.dll"],
+            imports: &[KERNEL32],
             delay_imports: &[],
             load_config: Some((flags, FULL)),
         });
@@ -97,7 +100,7 @@ fn system32_with_the_user_dirs_is_the_only_extra_that_passes() {
 #[test]
 fn flags_without_system32_are_reported() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: Some((0x400, FULL)),
     });
@@ -107,7 +110,7 @@ fn flags_without_system32_are_reported() {
 #[test]
 fn missing_load_config_is_reported() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: None,
     });
@@ -117,7 +120,7 @@ fn missing_load_config_is_reported() {
 #[test]
 fn load_config_too_short_to_hold_the_flags_is_reported() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: Some((0x800, 0x40)),
     });
@@ -126,7 +129,7 @@ fn load_config_too_short_to_hold_the_flags_is_reported() {
 
 fn runtime_import_kinds(dll: &str) -> Vec<ViolationKind> {
     kinds(&pe(&Pe {
-        imports: &["KERNEL32.dll", dll],
+        imports: &[KERNEL32, dll],
         delay_imports: &[],
         load_config: Some((0x800, FULL)),
     }))
@@ -291,7 +294,7 @@ fn delay_load_kinds(imports: &[&str], delay_imports: &[&str]) -> Vec<ViolationKi
 fn a_delay_loaded_redistributable_is_reported() {
     for dll in ["msvcp140.dll", "VCRUNTIME140.dll", "atl100.dll"] {
         assert_eq!(
-            delay_load_kinds(&["KERNEL32.dll"], &["KERNEL32.dll", dll]),
+            delay_load_kinds(&[KERNEL32], &["KERNEL32.dll", dll]),
             vec![ViolationKind::PeRuntimeImport],
             "{dll}"
         );
@@ -300,16 +303,13 @@ fn a_delay_loaded_redistributable_is_reported() {
 
 #[test]
 fn delay_loaded_system_dlls_pass() {
-    assert_eq!(
-        delay_load_kinds(&["KERNEL32.dll"], &["msvcp_win.dll", "ole32.dll"]),
-        vec![]
-    );
+    assert_eq!(delay_load_kinds(&[KERNEL32], &["msvcp_win.dll", "ole32.dll"]), vec![]);
 }
 
 #[test]
 fn a_redistributable_is_reported_once_per_table_that_imports_it() {
     assert_eq!(
-        delay_load_kinds(&["msvcp140.dll"], &["msvcp140.dll"]),
+        delay_load_kinds(&[KERNEL32, "msvcp140.dll"], &["msvcp140.dll"]),
         vec![ViolationKind::PeRuntimeImport; 2]
     );
 }
@@ -325,9 +325,57 @@ fn every_violation_is_reported_not_only_the_first() {
         kinds(&image),
         vec![
             ViolationKind::PeDependentLoadFlags,
+            ViolationKind::PeInitializer,
             ViolationKind::PeRuntimeImport,
             ViolationKind::PeRuntimeImport
         ]
+    );
+}
+
+/// The initializer's one call is `SetDefaultDllDirectories`, so an image that imports it has the initializer
+/// linked; one that does not has lost it, whatever its load flags say.
+#[test]
+fn an_image_that_does_not_import_set_default_dll_directories_is_reported() {
+    for imports in [&["KERNEL32.dll"][..], &[], &["KERNEL32.dll!SetDllDirectoryW"]] {
+        let image = pe(&Pe {
+            imports,
+            delay_imports: &[],
+            load_config: Some((0x800, FULL)),
+        });
+        assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer], "{imports:?}");
+    }
+}
+
+/// The import counts in any DLL that exports it (`kernel32` or an API set) and in any case of the DLL name.
+#[test]
+fn the_initializer_import_is_found_whichever_dll_it_comes_from() {
+    for dll in ["kernel32.dll", "api-ms-win-core-libraryloader-l1-2-0.dll"] {
+        let import = format!("{dll}!SetDefaultDllDirectories");
+        let image = pe(&Pe {
+            imports: &["USER32.dll", &import],
+            delay_imports: &[],
+            load_config: Some((0x800, FULL)),
+        });
+        assert_eq!(kinds(&image), vec![], "{dll}");
+    }
+}
+
+/// A delay-loaded call runs on first use, not before `main`: it is not the initializer.
+#[test]
+fn a_delay_loaded_set_default_dll_directories_is_not_the_initializer() {
+    let image = pe(&Pe {
+        imports: &["KERNEL32.dll"],
+        delay_imports: &["KERNEL32.dll!SetDefaultDllDirectories"],
+        load_config: Some((0x800, FULL)),
+    });
+    assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer]);
+}
+
+#[test]
+fn a_pe32_without_the_initializer_is_reported() {
+    assert_eq!(
+        pe32_kinds(&["KERNEL32.dll"], Some((0x800, FULL32))),
+        vec![ViolationKind::PeInitializer]
     );
 }
 
@@ -344,13 +392,13 @@ fn pe32_kinds(imports: &[&str], load_config: Option<(u16, u32)>) -> Vec<Violatio
 
 #[test]
 fn a_hardened_pe32_passes() {
-    assert_eq!(pe32_kinds(&["KERNEL32.dll"], Some((0x800, FULL32))), vec![]);
+    assert_eq!(pe32_kinds(&[KERNEL32], Some((0x800, FULL32))), vec![]);
 }
 
 #[test]
 fn a_pe32_without_system32_in_its_flags_is_reported() {
     assert_eq!(
-        pe32_kinds(&["KERNEL32.dll"], Some((0x400, FULL32))),
+        pe32_kinds(&[KERNEL32], Some((0x400, FULL32))),
         vec![ViolationKind::PeDependentLoadFlags]
     );
 }
@@ -358,7 +406,7 @@ fn a_pe32_without_system32_in_its_flags_is_reported() {
 #[test]
 fn a_pe32_that_searches_the_executables_folder_is_reported() {
     assert_eq!(
-        pe32_kinds(&["KERNEL32.dll"], Some((0x800 | 0x200, FULL32))),
+        pe32_kinds(&[KERNEL32], Some((0x800 | 0x200, FULL32))),
         vec![ViolationKind::PeDependentLoadFlags]
     );
 }
@@ -367,7 +415,7 @@ fn a_pe32_that_searches_the_executables_folder_is_reported() {
 fn a_pe32_without_a_load_config_or_with_one_too_short_is_reported() {
     for load_config in [None, Some((0x800, 0x30))] {
         assert_eq!(
-            pe32_kinds(&["KERNEL32.dll"], load_config),
+            pe32_kinds(&[KERNEL32], load_config),
             vec![ViolationKind::PeDependentLoadFlags],
             "{load_config:?}"
         );
@@ -377,7 +425,7 @@ fn a_pe32_without_a_load_config_or_with_one_too_short_is_reported() {
 #[test]
 fn a_pe32_that_imports_a_redistributable_is_reported() {
     assert_eq!(
-        pe32_kinds(&["KERNEL32.dll", "VCRUNTIME140.dll"], Some((0x800, FULL32))),
+        pe32_kinds(&[KERNEL32, "VCRUNTIME140.dll"], Some((0x800, FULL32))),
         vec![ViolationKind::PeRuntimeImport]
     );
 }

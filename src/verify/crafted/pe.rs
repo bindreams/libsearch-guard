@@ -4,8 +4,10 @@ use super::put;
 
 /// What a crafted PE32+ ([`pe`]) or PE32 ([`pe32`]) image should contain.
 pub struct Pe<'a> {
+    /// DLLs in the import directory. `"dll"` imports one function, `f`, from it; `"dll!function"` imports that
+    /// function.
     pub imports: &'a [&'a str],
-    /// DLLs in the delay-load import directory.
+    /// DLLs in the delay-load import directory, spelled like `imports`.
     pub delay_imports: &'a [&'a str],
     /// `None`: no load config directory. `Some((flags, size))`: a directory of `size` bytes with these flags;
     /// a `size` too small to reach the field omits it.
@@ -48,13 +50,16 @@ fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
     let descriptors_at = sec.len();
     sec.resize((spec.imports.len() + 1) * 20, 0); // import descriptors + null terminator
     let mut descriptors = Vec::new();
-    for dll in spec.imports {
+    for import in spec.imports {
+        let (dll, function) = import.split_once('!').unwrap_or((import, "f"));
         let name_rva = SECTION_RVA + sec.len() as u32;
         sec.extend_from_slice(dll.as_bytes());
         sec.push(0);
         sec.resize(sec.len().next_multiple_of(8), 0);
         let hint_rva = SECTION_RVA + sec.len() as u32;
-        sec.extend_from_slice(&[0, 0, b'f', 0]); // hint 0, name "f"
+        sec.extend_from_slice(&[0, 0]); // hint 0
+        sec.extend_from_slice(function.as_bytes());
+        sec.push(0);
         sec.resize(sec.len().next_multiple_of(8), 0);
         let thunk_rva = SECTION_RVA + sec.len() as u32;
         sec.extend_from_slice(&(hint_rva as u64).to_le_bytes()[..thunk_size]);
@@ -77,13 +82,25 @@ fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
         sec.resize(sec.len().next_multiple_of(8), 0);
         let descriptors_at = sec.len();
         sec.resize(descriptors_at + (spec.delay_imports.len() + 1) * 32, 0); // descriptors + null terminator
-        for (i, dll) in spec.delay_imports.iter().enumerate() {
+        for (i, import) in spec.delay_imports.iter().enumerate() {
+            let (dll, function) = import.split_once('!').unwrap_or((import, "f"));
             let name_rva = SECTION_RVA + sec.len() as u32;
             sec.extend_from_slice(dll.as_bytes());
             sec.push(0);
+            sec.resize(sec.len().next_multiple_of(8), 0);
+            let hint_rva = SECTION_RVA + sec.len() as u32;
+            sec.extend_from_slice(&[0, 0]); // hint 0
+            sec.extend_from_slice(function.as_bytes());
+            sec.push(0);
+            sec.resize(sec.len().next_multiple_of(8), 0);
+            let thunk_rva = SECTION_RVA + sec.len() as u32;
+            sec.extend_from_slice(&(hint_rva as u64).to_le_bytes()[..thunk_size]);
+            sec.extend_from_slice(&[0u8; 8][..thunk_size]);
             let at = descriptors_at + i * 32;
             put(&mut sec, at, &1u32.to_le_bytes()); // IMAGE_DELAYLOAD_RVA_BASED
             put(&mut sec, at + 4, &name_rva.to_le_bytes());
+            put(&mut sec, at + 12, &thunk_rva.to_le_bytes()); // import address table
+            put(&mut sec, at + 16, &thunk_rva.to_le_bytes()); // import name table
         }
         delay_dir = (
             SECTION_RVA + descriptors_at as u32,

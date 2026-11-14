@@ -1,9 +1,10 @@
 //! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32` and no bit outside it
-//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, and no Visual C++ redistributable DLL is imported, in the
-//! import table or the delay-load import table.
+//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, the import table has `SetDefaultDllDirectories` (the pre-`main`
+//! initializer's call), and no Visual C++ redistributable DLL is imported, in the import table or the
+//! delay-load import table.
 
 use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG};
-use object::read::pe::{ImageNtHeaders, PeFile};
+use object::read::pe::{ImageNtHeaders, Import, PeFile};
 use object::LittleEndian as LE;
 
 use super::{unreadable, Violation, ViolationKind};
@@ -188,6 +189,13 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         });
     }
 
+    if !imports_initializer_call::<Pe>(&file).map_err(unreadable)? {
+        out.push(Violation {
+            kind: ViolationKind::PeInitializer,
+            detail: "does not import SetDefaultDllDirectories, so the pre-main initializer that bins() links in is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
+        });
+    }
+
     // A delay-loaded DLL is loaded by `LoadLibrary` at its first call, and is searched for like an imported one.
     let mut names = Vec::new();
     if let Some(imports) = file.import_table().map_err(unreadable)? {
@@ -212,6 +220,37 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         }
     }
     Ok(())
+}
+
+/// Whether the import table (not the delay-load one: that call runs on first use, not before `main`) imports
+/// `SetDefaultDllDirectories` by name, from any DLL.
+///
+/// The initializer is the one thing in a `bins()` binary that calls it, and the call is the only reference to the
+/// import, so a binary has the import exactly when the initializer's object was linked into it. The linker
+/// merges the `.CRT$XIAB` section it sits in into `.rdata` and a release binary has no symbols, so neither
+/// shows it; the import table survives both.
+fn imports_initializer_call<'data, Pe: ImageNtHeaders>(file: &PeFile<'data, Pe, &'data [u8]>) -> object::Result<bool> {
+    let Some(imports) = file.import_table()? else {
+        return Ok(false);
+    };
+    let mut descriptors = imports.descriptors()?;
+    while let Some(descriptor) = descriptors.next()? {
+        // Linkers write the lookup table; a bound or old-style image may leave it empty and have only the address
+        // table, which holds the same names until the loader overwrites it.
+        let thunks_at = match descriptor.original_first_thunk.get(LE) {
+            0 => descriptor.first_thunk.get(LE),
+            at => at,
+        };
+        let mut thunks = imports.thunks(thunks_at)?;
+        while let Some(thunk) = thunks.next::<Pe>()? {
+            if let Import::Name(_hint, name) = imports.import::<Pe>(thunk)? {
+                if name == b"SetDefaultDllDirectories" {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// `DependentLoadFlags` from the load config directory, or 0 where the directory is absent or too short to
