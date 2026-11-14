@@ -37,10 +37,9 @@ pub enum ViolationKind {
     /// language and UWP `_app` variants, and `ucrtbased`), which Windows searches for in the executable's folder first.
     /// The DLLs that ship in Windows (`msvcp_win`, `msvcrt`, `mfcore`, `mfc42`, ...) are not reported.
     PeRuntimeImport,
-    /// PE: an executable without the `.lsguard` section that the object of the initializer `bins()` links in
-    /// defines, so the initializer is not linked and a `LoadLibrary` call without flags still searches the
-    /// executable's folder. A DLL is not checked: it never carries the initializer. A binary hardened by 0.1.x has
-    /// no such section and is reported from 0.2.0 on: rebuild it with 0.2.0 or later.
+    /// PE: an executable without the `.lsguard` section that the initializer's object defines, so the initializer
+    /// is not linked and a `LoadLibrary` call without flags still searches the executable's folder. A DLL is not
+    /// checked.
     PeInitializer,
     /// ELF: an `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative.
     ElfSearchPath,
@@ -82,10 +81,7 @@ pub enum VerifyError {
     /// The file could not be read.
     Io(std::io::Error),
     /// The file is not a PE, ELF or Mach-O executable this crate can read, a slice of a universal binary is not a
-    /// Mach-O image, or a part of it (a library path, say) is not valid UTF-8, so a check could not be made. A
-    /// PE section name that cannot be read (a long name into a string table the image does not have) is such a part
-    /// only in an executable (a DLL is not checked for the initializer) with no section named `.lsguard`: the
-    /// name could have been that one.
+    /// Mach-O image, or a part of it (a library path, say) is not valid UTF-8, so a check could not be made.
     Unreadable {
         /// What could not be read.
         why: String,
@@ -162,7 +158,6 @@ fn verify_bytes(data: &[u8]) -> Result<(), VerifyError> {
     match check(data, &mut violations) {
         Ok(()) if violations.is_empty() => Ok(()),
         Ok(()) => Err(VerifyError::Violations(violations)),
-        // What was found is not lost.
         Err(VerifyError::Unreadable { why, .. }) => Err(VerifyError::Unreadable { why, found: violations }),
         Err(error) => Err(error),
     }

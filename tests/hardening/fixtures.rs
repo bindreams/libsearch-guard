@@ -22,9 +22,8 @@ pub enum Probe {
     /// The consumer calls `bins()` and links the C runtime statically (`-C target-feature=+crt-static`).
     #[cfg(windows)]
     HardenedCrtStatic,
-    /// The hardening of `Hardened` except the initializer: the link arguments a consumer is left with when a link
-    /// change drops the object that `bins()` hands the linker. Static runtime, `/DEPENDENTLOADFLAG:0x800`, no
-    /// `SetDefaultDllDirectories` call.
+    /// `Hardened` without the initializer: what a consumer is left with when a link change drops the object `bins()`
+    /// hands the linker.
     #[cfg(windows)]
     HardenedWithoutInitializer,
     /// Built so that the loader searches the executable's folder, whatever the platform's way of asking is

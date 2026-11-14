@@ -89,13 +89,8 @@ unsafe extern "C" fn initialize() -> i32 {
 #[link_section = ".CRT$XIAB"]
 static INITIALIZER: unsafe extern "C" fn() -> i32 = initialize;
 
-/// The section `verify` looks for in an executable to know that this object was linked: it is defined in the same
-/// object as the `.CRT$XIAB` entry, and `#[used]` keeps it through `/OPT:REF` and `/OPT:ICF`, so the image has a
-/// section of this name exactly when the initializer was linked. Nothing refers to it. The name is the whole 8-byte
-/// field of a PE section header.
-///
-/// The cost is a section header, one `FileAlignment` block on disk and one page of address space per hardened
-/// executable; it buys a check that reads only the section table.
+/// Lets `verify` see that this object was linked: it shares an object with the `.CRT$XIAB` entry, and `#[used]`
+/// keeps it through `/OPT:REF` and `/OPT:ICF`. Nothing refers to it.
 #[used]
 #[link_section = ".lsguard"]
 static LINKED: [u8; 1] = [1];

@@ -33,7 +33,7 @@ pub struct Variant {
     pub no_initializer: bool,
     /// A DLL: `IMAGE_FILE_DLL` is set in the COFF characteristics.
     pub dll: bool,
-    /// Bytes at the end of the `.rdata` section's data, which nothing in the image refers to or reads.
+    /// Bytes at the end of the `.rdata` section's data.
     pub unread_data: &'static [u8],
     /// A section whose name cannot be read: a long name (`/99`, an offset into the COFF string table) into a
     /// string table the image does not have.
@@ -55,12 +55,10 @@ pub enum BrokenName {
     After,
 }
 
-/// A 64-bit executable.
 pub fn pe(spec: &Pe) -> Vec<u8> {
     pe_variant(spec, &Variant::default())
 }
 
-/// A 32-bit executable.
 pub fn pe32(spec: &Pe) -> Vec<u8> {
     pe_variant(
         spec,

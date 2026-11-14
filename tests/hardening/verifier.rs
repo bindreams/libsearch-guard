@@ -75,7 +75,6 @@ fn only_the_bins_and_their_own_harnesses_are_hardened() {
         ("sidecar", "example", false),
     ] {
         let kinds = violation_kinds(verify(file_of(artifacts, target, kind, harness)).unwrap_err());
-        // A DLL never carries the initializer, so it is not reported for lacking it.
         let expected: Vec<_> = UNHARDENED
             .into_iter()
             .filter(|kind_| kind != "cdylib" || *kind_ != ViolationKind::PeInitializer)

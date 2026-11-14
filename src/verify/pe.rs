@@ -1,7 +1,6 @@
 //! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32` and no bit outside it
-//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, an executable has the section of the pre-`main` initializer's object (a DLL
-//! never does), and no Visual C++ redistributable DLL is imported, in the import table or the delay-load import
-//! table.
+//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, an executable has the section of the pre-`main` initializer's object, and no
+//! Visual C++ redistributable DLL is imported, in the import table or the delay-load import table.
 
 use object::pe::{
     ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, IMAGE_FILE_DLL,
@@ -11,7 +10,7 @@ use object::{LittleEndian as LE, Object, ObjectSection};
 
 use super::{unreadable, Violation, ViolationKind};
 
-/// The section the initializer's object defines (`initializer/pre_main.rs`). The name is the whole 8-byte field.
+/// The section the initializer's object defines.
 const INITIALIZER_SECTION: &[u8] = b".lsguard";
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
@@ -174,8 +173,8 @@ fn mfc_suffix(suffix: &str) -> bool {
     mfcm_suffix(suffix) || (suffix.len() == 3 && suffix.bytes().all(|b| b.is_ascii_lowercase()))
 }
 
-/// Runs every check, whether or not an earlier one could read its part of the image: each pushes the violations
-/// it finds, so none hides another. The first part that cannot be read is the error, returned once all have run.
+/// Runs every check even if an earlier one cannot read its part of the image; the first unreadable part is the
+/// error, returned after all have run.
 pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -> Result<(), super::VerifyError> {
     let file = PeFile::<Pe, _>::parse(data).map_err(unreadable)?;
     let results = [
@@ -254,7 +253,8 @@ fn check_initializer<'data, Pe: ImageNtHeaders>(
     file: &PeFile<'data, Pe, &'data [u8]>,
     out: &mut Vec<Violation>,
 ) -> Result<(), super::VerifyError> {
-    // A DLL never carries the initializer: it must not change the search order of the process that loads it.
+    // A DLL must not change the search order of the process that loads it, so `bins()` never links the initializer
+    // into one.
     let is_dll = file
         .nt_headers()
         .file_header()
@@ -264,20 +264,15 @@ fn check_initializer<'data, Pe: ImageNtHeaders>(
     if !is_dll && !has_initializer_section(file)? {
         out.push(Violation {
             kind: ViolationKind::PeInitializer,
-            detail: "has no `.lsguard` section, which the pre-main initializer that bins() links in contributes, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
+            detail: "has no `.lsguard` section, so the pre-main initializer is not linked and a LoadLibrary call without flags still searches the executable's folder".into(),
         });
     }
     Ok(())
 }
 
-/// Whether the image has the initializer's section.
-///
-/// The object that holds the initializer also defines the section, so an image has it exactly when the initializer
-/// was linked. The `.CRT$XIAB` entry itself is merged into `.rdata`, and a release binary has no symbols, so
-/// neither shows it; the section table always does. Only the names are read: a section's data is not. A name
-/// that cannot be read (a long name into a string table the image does not have) matters only if it could be the
-/// initializer's: where `.lsguard` is found, the initializer is present whatever the other names say; where it is
-/// not and some name could not be read, the image is unreadable.
+/// Whether the image has the initializer's section. The `.CRT$XIAB` entry is merged into `.rdata` and a release
+/// binary has no symbols, so only the section table shows the initializer. An unreadable name could have been
+/// `.lsguard`, so it is an error unless `.lsguard` is found.
 fn has_initializer_section<'data, Pe: ImageNtHeaders>(
     file: &PeFile<'data, Pe, &'data [u8]>,
 ) -> Result<bool, super::VerifyError> {

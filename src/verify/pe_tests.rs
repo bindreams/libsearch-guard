@@ -349,9 +349,7 @@ fn hardened_spec() -> Pe<'static> {
     }
 }
 
-/// The initializer's object contributes the `.lsguard` section, so an image without it has lost the initializer,
-/// whatever its load flags say, and whatever it imports: a dependency that calls `SetDefaultDllDirectories` does
-/// not stand in.
+/// A dependency that calls `SetDefaultDllDirectories` does not stand in for the initializer.
 #[test]
 fn an_image_without_the_initializers_section_is_reported() {
     for imports in [&[KERNEL32][..], &[], &["KERNEL32.dll!SetDefaultDllDirectories"]] {
@@ -367,7 +365,6 @@ fn an_image_without_the_initializers_section_is_reported() {
     }
 }
 
-/// Whatever else the image imports, the section is what shows the initializer.
 #[test]
 fn an_image_with_the_initializers_section_passes_whatever_it_imports() {
     let spec = Pe {
@@ -493,8 +490,7 @@ fn violations_found_before_an_unreadable_import_table_are_kept() {
     assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
 }
 
-/// The checks are independent: a part that cannot be read does not hide what the other checks find. The first
-/// unreadable part is the error, with every violation kept.
+/// The `why` and violation kinds of an unreadable image.
 fn unreadable_found(spec: &Pe, variant: &Variant) -> (String, Vec<ViolationKind>) {
     match verify_bytes(&pe_variant(spec, variant)) {
         Err(VerifyError::Unreadable { why, found }) => (why, found.into_iter().map(|v| v.kind).collect()),
@@ -565,6 +561,20 @@ fn a_dll_without_the_initializer_is_not_reported_for_it() {
         ..hardened_spec()
     };
     assert_eq!(kinds(&pe_variant(&runtime, &dll)), vec![ViolationKind::PeRuntimeImport]);
+}
+
+/// A DLL is not checked for the initializer, so a section name that cannot be read does not matter.
+#[test]
+fn a_dll_with_a_section_name_that_cannot_be_read_is_not_unreadable() {
+    for name in BROKEN_NAMES {
+        let dll = Variant {
+            dll: true,
+            no_initializer: true,
+            broken_name: Some(name),
+            ..Variant::default()
+        };
+        assert_eq!(kinds(&pe_variant(&hardened_spec(), &dll)), vec![], "{name:?}");
+    }
 }
 
 #[test]
