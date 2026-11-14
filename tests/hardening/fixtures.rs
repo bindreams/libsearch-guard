@@ -22,7 +22,7 @@ pub enum Probe {
     /// The consumer calls `bins()` and links the C runtime statically (`-C target-feature=+crt-static`).
     #[cfg(windows)]
     HardenedCrtStatic,
-    /// `Hardened` without the initializer: what a consumer is left with when a link change drops the object `bins()`
+    /// `HardenedCrtStatic` without the initializer: what a consumer is left with when a link change drops the object `bins()`
     /// hands the linker.
     #[cfg(windows)]
     HardenedWithoutInitializer,

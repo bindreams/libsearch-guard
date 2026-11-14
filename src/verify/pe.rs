@@ -10,7 +10,7 @@ use object::{LittleEndian as LE, Object, ObjectSection};
 
 use super::{unreadable, Violation, ViolationKind};
 
-/// The section the initializer's object defines.
+/// The section the initializer's object defines (`initializer/pre_main.rs`, `LINKED`); the two names must match.
 const INITIALIZER_SECTION: &[u8] = b".lsguard";
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;

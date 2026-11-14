@@ -81,7 +81,8 @@ pub enum VerifyError {
     /// The file could not be read.
     Io(std::io::Error),
     /// The file is not a PE, ELF or Mach-O executable this crate can read, a slice of a universal binary is not a
-    /// Mach-O image, or a part of it (a library path, say) is not valid UTF-8, so a check could not be made.
+    /// Mach-O image, a part of it (a library path, say) is not valid UTF-8, or a PE executable without a `.lsguard`
+    /// section has a section name that cannot be read, so a check could not be made.
     Unreadable {
         /// What could not be read.
         why: String,

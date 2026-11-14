@@ -90,7 +90,8 @@ unsafe extern "C" fn initialize() -> i32 {
 static INITIALIZER: unsafe extern "C" fn() -> i32 = initialize;
 
 /// Lets `verify` see that this object was linked: it shares an object with the `.CRT$XIAB` entry, and `#[used]`
-/// keeps it through `/OPT:REF` and `/OPT:ICF`. Nothing refers to it.
+/// keeps it through `/OPT:REF` and `/OPT:ICF`. Nothing refers to it. The name must equal `verify`'s
+/// `INITIALIZER_SECTION` and fit a PE section header's 8 bytes.
 #[used]
 #[link_section = ".lsguard"]
 static LINKED: [u8; 1] = [1];
