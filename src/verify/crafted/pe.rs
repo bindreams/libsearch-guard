@@ -35,6 +35,20 @@ pub struct Variant {
     pub dll: bool,
     /// Bytes at the end of the `.rdata` section's data, which nothing in the image refers to or reads.
     pub unread_data: &'static [u8],
+    /// A section whose name cannot be read: a long name (`/99`, an offset into the COFF string table) into a
+    /// string table the image does not have.
+    pub broken_name: Option<BrokenName>,
+    /// The import directory's RVA is outside the image, so the import table cannot be read.
+    pub unreadable_import_table: bool,
+}
+
+/// Which section of a crafted image has a name that cannot be read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BrokenName {
+    /// `.rdata`, which comes before `.lsguard`.
+    Before,
+    /// A third section, after `.lsguard` (or after `.rdata`, where there is no `.lsguard`).
+    After,
 }
 
 /// A 64-bit executable.
@@ -161,8 +175,15 @@ pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
     if variant.dll {
         characteristics |= 0x2000; // IMAGE_FILE_DLL
     }
-    let sections = if variant.no_initializer { 1u16 } else { 2 };
-    img.extend_from_slice(&sections.to_le_bytes());
+    // The sections after `.rdata`, in order; each is 0x200 bytes of data at its own multiple of SectionAlignment.
+    let mut later: Vec<&[u8]> = Vec::new();
+    if !variant.no_initializer {
+        later.push(b".lsguard"); // all 8 bytes of the name field
+    }
+    if variant.broken_name == Some(BrokenName::After) {
+        later.push(b"/99");
+    }
+    img.extend_from_slice(&(later.len() as u16 + 1).to_le_bytes());
     img.extend_from_slice(&[0u8; 12]); // timestamp, symbol table, symbol count
     img.extend_from_slice(&optional_size.to_le_bytes());
     img.extend_from_slice(&characteristics.to_le_bytes());
@@ -180,12 +201,8 @@ pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
     opt[32..36].copy_from_slice(&0x1000u32.to_le_bytes()); // SectionAlignment
     opt[36..40].copy_from_slice(&0x200u32.to_le_bytes()); // FileAlignment
                                                           // Every section starts, and the image ends, on a multiple of SectionAlignment.
-    let guard_rva = (SECTION_RVA + section_size as u32).next_multiple_of(0x1000);
-    let image_end = if variant.no_initializer {
-        guard_rva
-    } else {
-        guard_rva + 0x1000
-    };
+    let later_rva = (SECTION_RVA + section_size as u32).next_multiple_of(0x1000);
+    let image_end = later_rva + 0x1000 * later.len() as u32;
     opt[56..60].copy_from_slice(&image_end.to_le_bytes()); // SizeOfImage
     opt[60..64].copy_from_slice(&0x200u32.to_le_bytes()); // SizeOfHeaders
     opt[68..70].copy_from_slice(&3u16.to_le_bytes()); // console subsystem
@@ -194,34 +211,45 @@ pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
         opt[data_dirs_at + index * 8..data_dirs_at + index * 8 + 4].copy_from_slice(&rva.to_le_bytes());
         opt[data_dirs_at + index * 8 + 4..data_dirs_at + index * 8 + 8].copy_from_slice(&size.to_le_bytes());
     };
-    dir(&mut opt, 1, import_dir);
+    // An RVA no section holds.
+    dir(
+        &mut opt,
+        1,
+        if variant.unreadable_import_table {
+            (0x00F0_0000, import_dir.1)
+        } else {
+            import_dir
+        },
+    );
     dir(&mut opt, 10, load_dir);
     dir(&mut opt, 13, delay_dir);
     img.extend_from_slice(&opt);
-    // Section header.
+    // Section headers.
     let mut header = [0u8; 40];
-    header[..6].copy_from_slice(b".rdata");
+    let name: &[u8] = if variant.broken_name == Some(BrokenName::Before) {
+        b"/99"
+    } else {
+        b".rdata"
+    };
+    header[..name.len()].copy_from_slice(name);
     header[8..12].copy_from_slice(&(section_size as u32).to_le_bytes()); // VirtualSize
     header[12..16].copy_from_slice(&SECTION_RVA.to_le_bytes());
     header[16..20].copy_from_slice(&(section_size as u32).to_le_bytes()); // SizeOfRawData
     header[20..24].copy_from_slice(&(SECTION_FILE as u32).to_le_bytes());
     header[36..40].copy_from_slice(&0x4000_0040u32.to_le_bytes()); // readable initialized data
     img.extend_from_slice(&header);
-    if !variant.no_initializer {
+    for (i, name) in later.iter().enumerate() {
         let mut header = [0u8; 40];
-        header[..8].copy_from_slice(b".lsguard"); // all 8 bytes of the name field
+        header[..name.len()].copy_from_slice(name);
         header[8..12].copy_from_slice(&0x200u32.to_le_bytes()); // VirtualSize
-        header[12..16].copy_from_slice(&guard_rva.to_le_bytes());
+        header[12..16].copy_from_slice(&(later_rva + 0x1000 * i as u32).to_le_bytes());
         header[16..20].copy_from_slice(&0x200u32.to_le_bytes()); // SizeOfRawData
-        header[20..24].copy_from_slice(&((SECTION_FILE + section_size) as u32).to_le_bytes());
+        header[20..24].copy_from_slice(&((SECTION_FILE + section_size + 0x200 * i) as u32).to_le_bytes());
         header[36..40].copy_from_slice(&0x4000_0040u32.to_le_bytes()); // readable initialized data
         img.extend_from_slice(&header);
     }
     img.resize(SECTION_FILE, 0);
     img.extend_from_slice(&sec);
-    if !variant.no_initializer {
-        img.resize(SECTION_FILE + section_size, 0);
-        img.extend_from_slice(&[1u8; 0x200]);
-    }
+    img.resize(SECTION_FILE + section_size + 0x200 * later.len(), 1);
     img
 }

@@ -1,4 +1,4 @@
-use super::crafted::{pe, pe32, pe_variant, Bits, Pe, Variant};
+use super::crafted::{pe, pe32, pe_variant, Bits, BrokenName, Pe, Variant};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -327,9 +327,9 @@ fn every_violation_is_reported_not_only_the_first() {
         kinds(&image),
         vec![
             ViolationKind::PeDependentLoadFlags,
-            ViolationKind::PeInitializer,
             ViolationKind::PeRuntimeImport,
-            ViolationKind::PeRuntimeImport
+            ViolationKind::PeRuntimeImport,
+            ViolationKind::PeInitializer
         ]
     );
 }
@@ -403,62 +403,93 @@ fn only_a_section_of_exactly_that_name_shows_the_initializer() {
     assert_eq!(kinds(&embedded), vec![ViolationKind::PeInitializer]);
 }
 
-/// Where the section headers start in a crafted PE32+ image: the DOS header (0x40), the signature (4), the COFF
-/// header (20) and the optional header (240). The image has `.rdata`, then `.lsguard`; each header is 40 bytes.
-const SECTION_HEADERS: usize = 0x40 + 4 + 20 + 240;
-const SECTION_HEADER: usize = 40;
-
-/// Makes the name of the section at `index` a long name (`/nnn`, an offset into the COFF string table) into a
-/// string table the image does not have.
-fn break_section_name(image: &mut [u8], index: usize) {
-    let at = SECTION_HEADERS + index * SECTION_HEADER;
-    image[at..at + 8].copy_from_slice(b"/99\0\0\0\0\0");
+fn broken(name: BrokenName) -> Variant {
+    Variant {
+        broken_name: Some(name),
+        ..Variant::default()
+    }
 }
 
-/// A section whose name cannot be read could be the initializer's, so the image is not passed or reported for
-/// lacking it: it is unreadable, and what was found before is kept. Both where the section comes before the
-/// `.lsguard` one and where it comes after.
+const BROKEN_NAMES: [BrokenName; 2] = [BrokenName::Before, BrokenName::After];
+
+/// A section name that cannot be read matters only if it could be the initializer's: with `.lsguard` found
+/// anywhere, the initializer is present, whatever the other names say.
 #[test]
-fn a_section_name_that_cannot_be_read_is_unreadable_wherever_it_is() {
-    let swap_headers = |image: &mut Vec<u8>| {
-        let (first, second) = (SECTION_HEADERS, SECTION_HEADERS + SECTION_HEADER);
-        for i in 0..SECTION_HEADER {
-            image.swap(first + i, second + i);
-        }
+fn a_section_name_that_cannot_be_read_does_not_hide_the_initializers_section() {
+    for name in BROKEN_NAMES {
+        assert_eq!(kinds(&pe_variant(&hardened_spec(), &broken(name))), vec![], "{name:?}");
+    }
+}
+
+/// Without `.lsguard`, a name that cannot be read could have been it: the image is unreadable, not reported for
+/// lacking the initializer, and what was found before is kept. The error says which section, and why it matters.
+#[test]
+fn without_the_initializers_section_a_section_name_that_cannot_be_read_is_unreadable() {
+    let spec = Pe {
+        load_config: None,
+        ..hardened_spec()
     };
-    for (broken, swapped) in [(0, false), (1, true)] {
-        let mut image = pe(&Pe {
-            load_config: None,
-            ..hardened_spec()
-        });
-        if swapped {
-            swap_headers(&mut image);
-        }
-        break_section_name(&mut image, broken);
-        let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
-            panic!("broken section {broken} (swapped: {swapped}): not unreadable");
+    for (name, index) in [(BrokenName::Before, 0), (BrokenName::After, 1)] {
+        let variant = Variant {
+            no_initializer: true,
+            ..broken(name)
+        };
+        let Err(VerifyError::Unreadable { why, found }) = verify_bytes(&pe_variant(&spec, &variant)) else {
+            panic!("{name:?}: not unreadable");
         };
         assert_eq!(
             found.iter().map(|v| v.kind).collect::<Vec<_>>(),
             vec![ViolationKind::PeDependentLoadFlags],
-            "broken section {broken} (swapped: {swapped})"
+            "{name:?}"
+        );
+        assert!(
+            why.contains(&format!("section {index}")) && why.contains("initializer"),
+            "{name:?}: {why}"
         );
     }
 }
 
-/// Where the import directory's RVA is in a crafted PE32+ image: the optional header starts at 0x58, the data
-/// directories 112 bytes into it, the import directory is the second, and its size follows its RVA.
-const IMPORT_DIRECTORY_RVA: usize = 0x58 + 112 + 8;
+/// The section check runs after the import scans, so a name that cannot be read never hides a runtime import
+/// that can be.
+#[test]
+fn a_section_name_that_cannot_be_read_does_not_hide_a_runtime_import() {
+    let spec = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    for name in BROKEN_NAMES {
+        assert_eq!(
+            kinds(&pe_variant(&spec, &broken(name))),
+            vec![ViolationKind::PeRuntimeImport],
+            "{name:?}"
+        );
+        let variant = Variant {
+            no_initializer: true,
+            ..broken(name)
+        };
+        let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&pe_variant(&spec, &variant)) else {
+            panic!("{name:?}: not unreadable");
+        };
+        assert_eq!(
+            found.iter().map(|v| v.kind).collect::<Vec<_>>(),
+            vec![ViolationKind::PeRuntimeImport],
+            "{name:?}"
+        );
+    }
+}
 
 /// What was found before a part that cannot be read is kept, as for ELF and Mach-O.
 #[test]
 fn violations_found_before_an_unreadable_import_table_are_kept() {
-    let mut image = pe(&Pe {
+    let spec = Pe {
         load_config: None,
         ..hardened_spec()
-    });
-    image[IMPORT_DIRECTORY_RVA..IMPORT_DIRECTORY_RVA + 4].copy_from_slice(&0x00F0_0000u32.to_le_bytes());
-    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
+    };
+    let variant = Variant {
+        unreadable_import_table: true,
+        ..Variant::default()
+    };
+    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&pe_variant(&spec, &variant)) else {
         panic!("expected an unreadable file");
     };
     assert_eq!(found.len(), 1, "{found:?}");

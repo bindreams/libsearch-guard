@@ -194,20 +194,6 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         });
     }
 
-    // A DLL never carries the initializer: it must not change the search order of the process that loads it.
-    let is_dll = file
-        .nt_headers()
-        .file_header()
-        .characteristics
-        .get(LE)
-        .contains(IMAGE_FILE_DLL);
-    if !is_dll && !has_initializer_section(&file)? {
-        out.push(Violation {
-            kind: ViolationKind::PeInitializer,
-            detail: "has no `.lsguard` section, which the pre-main initializer that bins() links in contributes, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
-        });
-    }
-
     // A delay-loaded DLL is loaded by `LoadLibrary` at its first call, and is searched for like an imported one.
     let mut names = Vec::new();
     if let Some(imports) = file.import_table().map_err(unreadable)? {
@@ -231,6 +217,21 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
             });
         }
     }
+
+    // Last, so that a section name that cannot be read does not hide a violation that could be read.
+    // A DLL never carries the initializer: it must not change the search order of the process that loads it.
+    let is_dll = file
+        .nt_headers()
+        .file_header()
+        .characteristics
+        .get(LE)
+        .contains(IMAGE_FILE_DLL);
+    if !is_dll && !has_initializer_section(&file)? {
+        out.push(Violation {
+            kind: ViolationKind::PeInitializer,
+            detail: "has no `.lsguard` section, which the pre-main initializer that bins() links in contributes, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
+        });
+    }
     Ok(())
 }
 
@@ -238,17 +239,29 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
 ///
 /// The object that holds the initializer also defines the section, so an image has it exactly when the initializer
 /// was linked. The `.CRT$XIAB` entry itself is merged into `.rdata`, and a release binary has no symbols, so
-/// neither shows it; the section table always does. Only the names are read: a section's data is not. Every name
-/// is read, and one that cannot be (a long name into a string table the image does not have) makes the image
-/// unreadable: it could have been the initializer's.
+/// neither shows it; the section table always does. Only the names are read: a section's data is not. A name
+/// that cannot be read (a long name into a string table the image does not have) matters only if it could be the
+/// initializer's: where `.lsguard` is found, the initializer is present whatever the other names say; where it is
+/// not and some name could not be read, the image is unreadable.
 fn has_initializer_section<'data, Pe: ImageNtHeaders>(
     file: &PeFile<'data, Pe, &'data [u8]>,
 ) -> Result<bool, super::VerifyError> {
-    let mut found = false;
-    for section in file.sections() {
-        found |= section.name_bytes().map_err(unreadable)? == INITIALIZER_SECTION;
+    let mut unreadable_name = None;
+    for (index, section) in file.sections().enumerate() {
+        match section.name_bytes() {
+            Ok(name) if name == INITIALIZER_SECTION => return Ok(true),
+            Ok(_) => {}
+            Err(error) => {
+                unreadable_name.get_or_insert((index, error));
+            }
+        }
     }
-    Ok(found)
+    match unreadable_name {
+        None => Ok(false),
+        Some((index, error)) => Err(super::VerifyError::unreadable(format!(
+            "the name of section {index} (counting from 0) cannot be read ({error}), and the check for the initializer's `.lsguard` section needs it"
+        ))),
+    }
 }
 
 /// `DependentLoadFlags` from the load config directory, or 0 where the directory is absent or too short to

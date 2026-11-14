@@ -17,8 +17,8 @@ fn violation_kinds(error: VerifyError) -> Vec<ViolationKind> {
 #[cfg(windows)]
 const UNHARDENED: [ViolationKind; 3] = [
     ViolationKind::PeDependentLoadFlags,
-    ViolationKind::PeInitializer,
     ViolationKind::PeRuntimeImport,
+    ViolationKind::PeInitializer,
 ];
 
 #[test]
