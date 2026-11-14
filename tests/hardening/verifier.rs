@@ -13,6 +13,14 @@ fn violation_kinds(error: VerifyError) -> Vec<ViolationKind> {
     }
 }
 
+/// What `verify` reports for an executable that has none of the Windows hardening.
+#[cfg(windows)]
+const UNHARDENED: [ViolationKind; 3] = [
+    ViolationKind::PeDependentLoadFlags,
+    ViolationKind::PeRuntimeImport,
+    ViolationKind::PeInitializer,
+];
+
 #[test]
 fn the_hardened_probe_passes() {
     verify(probe(Probe::Hardened)).unwrap();
@@ -20,12 +28,18 @@ fn the_hardened_probe_passes() {
 
 #[cfg(windows)]
 #[test]
-fn the_plain_probe_breaks_both_windows_rules() {
+fn the_plain_probe_breaks_every_windows_rule() {
     let kinds = violation_kinds(verify(probe(Probe::Plain)).unwrap_err());
-    assert_eq!(
-        kinds,
-        vec![ViolationKind::PeDependentLoadFlags, ViolationKind::PeRuntimeImport]
-    );
+    assert_eq!(kinds, UNHARDENED);
+}
+
+/// A binary with the load flags and the static runtime but without the initializer claims hardening it lacks:
+/// `verify` reports the missing initializer and nothing else.
+#[cfg(windows)]
+#[test]
+fn a_probe_without_the_initializer_is_reported() {
+    let kinds = violation_kinds(verify(probe(Probe::HardenedWithoutInitializer)).unwrap_err());
+    assert_eq!(kinds, vec![ViolationKind::PeInitializer]);
 }
 
 #[cfg(target_os = "linux")]
@@ -61,11 +75,11 @@ fn only_the_bins_and_their_own_harnesses_are_hardened() {
         ("sidecar", "example", false),
     ] {
         let kinds = violation_kinds(verify(file_of(artifacts, target, kind, harness)).unwrap_err());
-        assert_eq!(
-            kinds,
-            vec![ViolationKind::PeDependentLoadFlags, ViolationKind::PeRuntimeImport],
-            "{target} ({kind}, harness: {harness})"
-        );
+        let expected: Vec<_> = UNHARDENED
+            .into_iter()
+            .filter(|kind_| kind != "cdylib" || *kind_ != ViolationKind::PeInitializer)
+            .collect();
+        assert_eq!(kinds, expected, "{target} ({kind}, harness: {harness})");
     }
 }
 

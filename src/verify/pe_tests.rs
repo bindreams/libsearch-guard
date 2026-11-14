@@ -1,4 +1,4 @@
-use super::crafted::{pe, pe32, Pe};
+use super::crafted::{pe, pe32, pe_variant, Bits, BrokenName, Pe, Variant};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -9,12 +9,14 @@ fn kinds(image: &[u8]) -> Vec<ViolationKind> {
     }
 }
 
+const KERNEL32: &str = "KERNEL32.dll";
+
 const FULL: u32 = size_of::<object::pe::ImageLoadConfigDirectory64>() as u32;
 
 #[test]
 fn hardened_pe_passes() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"],
+        imports: &[KERNEL32, "api-ms-win-crt-runtime-l1-1-0.dll"],
         delay_imports: &[],
         load_config: Some((0x800, FULL)),
     });
@@ -26,7 +28,7 @@ fn hardened_pe_passes() {
 #[test]
 fn flags_that_add_the_user_dirs_to_system32_pass() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: Some((0x800 | 0x400, FULL)),
     });
@@ -45,7 +47,7 @@ fn flags_that_search_the_executables_folder_are_reported_even_with_system32() {
         0x800 | 0x100 | 0x200 | 0x1000,
     ] {
         let image = pe(&Pe {
-            imports: &["KERNEL32.dll"],
+            imports: &[KERNEL32],
             delay_imports: &[],
             load_config: Some((flags, FULL)),
         });
@@ -65,7 +67,7 @@ fn a_flag_bit_outside_the_allowlist_is_reported_and_named() {
         (0x8800, "0x8000"),
     ] {
         let image = pe(&Pe {
-            imports: &["KERNEL32.dll"],
+            imports: &[KERNEL32],
             delay_imports: &[],
             load_config: Some((flags, FULL)),
         });
@@ -86,7 +88,7 @@ fn a_flag_bit_outside_the_allowlist_is_reported_and_named() {
 fn system32_with_the_user_dirs_is_the_only_extra_that_passes() {
     for flags in [0x800, 0xC00] {
         let image = pe(&Pe {
-            imports: &["KERNEL32.dll"],
+            imports: &[KERNEL32],
             delay_imports: &[],
             load_config: Some((flags, FULL)),
         });
@@ -97,7 +99,7 @@ fn system32_with_the_user_dirs_is_the_only_extra_that_passes() {
 #[test]
 fn flags_without_system32_are_reported() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: Some((0x400, FULL)),
     });
@@ -107,7 +109,7 @@ fn flags_without_system32_are_reported() {
 #[test]
 fn missing_load_config_is_reported() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: None,
     });
@@ -117,7 +119,7 @@ fn missing_load_config_is_reported() {
 #[test]
 fn load_config_too_short_to_hold_the_flags_is_reported() {
     let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
+        imports: &[KERNEL32],
         delay_imports: &[],
         load_config: Some((0x800, 0x40)),
     });
@@ -126,7 +128,7 @@ fn load_config_too_short_to_hold_the_flags_is_reported() {
 
 fn runtime_import_kinds(dll: &str) -> Vec<ViolationKind> {
     kinds(&pe(&Pe {
-        imports: &["KERNEL32.dll", dll],
+        imports: &[KERNEL32, dll],
         delay_imports: &[],
         load_config: Some((0x800, FULL)),
     }))
@@ -291,7 +293,7 @@ fn delay_load_kinds(imports: &[&str], delay_imports: &[&str]) -> Vec<ViolationKi
 fn a_delay_loaded_redistributable_is_reported() {
     for dll in ["msvcp140.dll", "VCRUNTIME140.dll", "atl100.dll"] {
         assert_eq!(
-            delay_load_kinds(&["KERNEL32.dll"], &["KERNEL32.dll", dll]),
+            delay_load_kinds(&[KERNEL32], &[KERNEL32, dll]),
             vec![ViolationKind::PeRuntimeImport],
             "{dll}"
         );
@@ -300,35 +302,295 @@ fn a_delay_loaded_redistributable_is_reported() {
 
 #[test]
 fn delay_loaded_system_dlls_pass() {
-    assert_eq!(
-        delay_load_kinds(&["KERNEL32.dll"], &["msvcp_win.dll", "ole32.dll"]),
-        vec![]
-    );
+    assert_eq!(delay_load_kinds(&[KERNEL32], &["msvcp_win.dll", "ole32.dll"]), vec![]);
 }
 
 #[test]
 fn a_redistributable_is_reported_once_per_table_that_imports_it() {
     assert_eq!(
-        delay_load_kinds(&["msvcp140.dll"], &["msvcp140.dll"]),
+        delay_load_kinds(&[KERNEL32, "msvcp140.dll"], &["msvcp140.dll"]),
         vec![ViolationKind::PeRuntimeImport; 2]
     );
 }
 
 #[test]
 fn every_violation_is_reported_not_only_the_first() {
-    let image = pe(&Pe {
-        imports: &["VCRUNTIME140.dll", "MSVCP140.dll"],
-        delay_imports: &[],
-        load_config: None,
-    });
+    let image = pe_variant(
+        &Pe {
+            imports: &["VCRUNTIME140.dll", "MSVCP140.dll"],
+            delay_imports: &[],
+            load_config: None,
+        },
+        &no_initializer(),
+    );
     assert_eq!(
         kinds(&image),
         vec![
             ViolationKind::PeDependentLoadFlags,
             ViolationKind::PeRuntimeImport,
-            ViolationKind::PeRuntimeImport
+            ViolationKind::PeRuntimeImport,
+            ViolationKind::PeInitializer
         ]
     );
+}
+
+fn no_initializer() -> Variant {
+    Variant {
+        no_initializer: true,
+        ..Variant::default()
+    }
+}
+
+fn hardened_spec() -> Pe<'static> {
+    Pe {
+        imports: &[KERNEL32],
+        delay_imports: &[],
+        load_config: Some((0x800, FULL)),
+    }
+}
+
+/// A dependency that calls `SetDefaultDllDirectories` does not stand in for the initializer.
+#[test]
+fn an_image_without_the_initializers_section_is_reported() {
+    for imports in [&[KERNEL32][..], &[], &["KERNEL32.dll!SetDefaultDllDirectories"]] {
+        let spec = Pe {
+            imports,
+            ..hardened_spec()
+        };
+        assert_eq!(
+            kinds(&pe_variant(&spec, &no_initializer())),
+            vec![ViolationKind::PeInitializer],
+            "{imports:?}"
+        );
+    }
+}
+
+#[test]
+fn an_image_with_the_initializers_section_passes_whatever_it_imports() {
+    let spec = Pe {
+        imports: &[
+            "USER32.dll",
+            "api-ms-win-core-libraryloader-l1-2-0.dll!SetDefaultDllDirectories",
+        ],
+        ..hardened_spec()
+    };
+    assert_eq!(kinds(&pe(&spec)), vec![]);
+}
+
+/// Only the section's name shows the initializer: the same text in another section's data, as in an executable
+/// that embeds a hardened one, and a name that differs in its last byte do not.
+#[test]
+fn only_a_section_of_exactly_that_name_shows_the_initializer() {
+    let rename = |image: &mut Vec<u8>, from: &[u8], to: &[u8]| {
+        let at = image.windows(from.len()).position(|window| window == from).unwrap();
+        image[at..at + to.len()].copy_from_slice(to);
+    };
+    let mut lookalike = pe(&hardened_spec());
+    rename(&mut lookalike, b".lsguard", b".lsguarX");
+    assert_eq!(kinds(&lookalike), vec![ViolationKind::PeInitializer]);
+
+    let embedded = pe_variant(
+        &hardened_spec(),
+        &Variant {
+            unread_data: b".lsguard",
+            ..no_initializer()
+        },
+    );
+    assert!(embedded.windows(8).any(|window| window == b".lsguard"));
+    assert_eq!(kinds(&embedded), vec![ViolationKind::PeInitializer]);
+}
+
+fn broken(name: BrokenName) -> Variant {
+    Variant {
+        broken_name: Some(name),
+        ..Variant::default()
+    }
+}
+
+const BROKEN_NAMES: [BrokenName; 2] = [BrokenName::Before, BrokenName::After];
+
+/// A section name that cannot be read matters only if it could be the initializer's: with `.lsguard` found
+/// anywhere, the initializer is present, whatever the other names say.
+#[test]
+fn a_section_name_that_cannot_be_read_does_not_hide_the_initializers_section() {
+    for name in BROKEN_NAMES {
+        assert_eq!(kinds(&pe_variant(&hardened_spec(), &broken(name))), vec![], "{name:?}");
+    }
+}
+
+/// Without `.lsguard`, a name that cannot be read could have been it: the image is unreadable, not reported for
+/// lacking the initializer, and what was found before is kept. The error names the section by its name field,
+/// and says why it matters.
+#[test]
+fn without_the_initializers_section_a_section_name_that_cannot_be_read_is_unreadable() {
+    let spec = Pe {
+        load_config: None,
+        ..hardened_spec()
+    };
+    for name in BROKEN_NAMES {
+        let variant = Variant {
+            no_initializer: true,
+            ..broken(name)
+        };
+        let Err(VerifyError::Unreadable { why, found }) = verify_bytes(&pe_variant(&spec, &variant)) else {
+            panic!("{name:?}: not unreadable");
+        };
+        assert_eq!(
+            found.iter().map(|v| v.kind).collect::<Vec<_>>(),
+            vec![ViolationKind::PeDependentLoadFlags],
+            "{name:?}"
+        );
+        assert!(why.contains("`/99`") && why.contains("initializer"), "{name:?}: {why}");
+    }
+}
+
+/// The checks are independent, so a section name that cannot be read never hides a runtime import that can be.
+#[test]
+fn a_section_name_that_cannot_be_read_does_not_hide_a_runtime_import() {
+    let spec = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    for name in BROKEN_NAMES {
+        assert_eq!(
+            kinds(&pe_variant(&spec, &broken(name))),
+            vec![ViolationKind::PeRuntimeImport],
+            "{name:?}"
+        );
+        let variant = Variant {
+            no_initializer: true,
+            ..broken(name)
+        };
+        let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&pe_variant(&spec, &variant)) else {
+            panic!("{name:?}: not unreadable");
+        };
+        assert_eq!(
+            found.iter().map(|v| v.kind).collect::<Vec<_>>(),
+            vec![ViolationKind::PeRuntimeImport],
+            "{name:?}"
+        );
+    }
+}
+
+/// What was found before a part that cannot be read is kept, as for ELF and Mach-O.
+#[test]
+fn violations_found_before_an_unreadable_import_table_are_kept() {
+    let spec = Pe {
+        load_config: None,
+        ..hardened_spec()
+    };
+    let variant = Variant {
+        unreadable_import_table: true,
+        ..Variant::default()
+    };
+    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&pe_variant(&spec, &variant)) else {
+        panic!("expected an unreadable file");
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
+}
+
+/// The `why` and violation kinds of an unreadable image.
+fn unreadable_found(spec: &Pe, variant: &Variant) -> (String, Vec<ViolationKind>) {
+    match verify_bytes(&pe_variant(spec, variant)) {
+        Err(VerifyError::Unreadable { why, found }) => (why, found.into_iter().map(|v| v.kind).collect()),
+        other => panic!("not unreadable: {other:?}"),
+    }
+}
+
+#[test]
+fn an_unreadable_load_config_hides_neither_a_runtime_import_nor_the_missing_initializer() {
+    let spec = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    let variant = Variant {
+        unreadable_load_config: true,
+        ..no_initializer()
+    };
+    let (_, found) = unreadable_found(&spec, &variant);
+    assert_eq!(
+        found,
+        vec![ViolationKind::PeRuntimeImport, ViolationKind::PeInitializer]
+    );
+}
+
+#[test]
+fn an_unreadable_import_table_does_not_hide_the_missing_initializer() {
+    let variant = Variant {
+        unreadable_import_table: true,
+        ..no_initializer()
+    };
+    let (_, found) = unreadable_found(&hardened_spec(), &variant);
+    assert_eq!(found, vec![ViolationKind::PeInitializer]);
+}
+
+#[test]
+fn an_unreadable_delay_load_table_keeps_the_runtime_imports_already_read() {
+    let spec = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    let variant = Variant {
+        unreadable_delay_table: true,
+        ..Variant::default()
+    };
+    let (_, found) = unreadable_found(&spec, &variant);
+    assert_eq!(found, vec![ViolationKind::PeRuntimeImport]);
+}
+
+/// A DLL never carries the initializer (it must not change the process's search order), so the check does not
+/// apply to it; the other rules do.
+#[test]
+fn a_dll_without_the_initializer_is_not_reported_for_it() {
+    let dll = Variant {
+        dll: true,
+        ..no_initializer()
+    };
+    assert_eq!(kinds(&pe_variant(&hardened_spec(), &dll)), vec![]);
+    let flags_missing = Pe {
+        load_config: None,
+        ..hardened_spec()
+    };
+    assert_eq!(
+        kinds(&pe_variant(&flags_missing, &dll)),
+        vec![ViolationKind::PeDependentLoadFlags]
+    );
+    let runtime = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    assert_eq!(kinds(&pe_variant(&runtime, &dll)), vec![ViolationKind::PeRuntimeImport]);
+}
+
+/// A DLL is not checked for the initializer, so a section name that cannot be read does not matter.
+#[test]
+fn a_dll_with_a_section_name_that_cannot_be_read_is_not_unreadable() {
+    for name in BROKEN_NAMES {
+        let dll = Variant {
+            dll: true,
+            no_initializer: true,
+            broken_name: Some(name),
+            ..Variant::default()
+        };
+        assert_eq!(kinds(&pe_variant(&hardened_spec(), &dll)), vec![], "{name:?}");
+    }
+}
+
+#[test]
+fn a_pe32_without_the_initializer_is_reported() {
+    let image = pe_variant(
+        &Pe {
+            imports: &[KERNEL32],
+            delay_imports: &[],
+            load_config: Some((0x800, FULL32)),
+        },
+        &Variant {
+            bits: Bits::B32,
+            ..no_initializer()
+        },
+    );
+    assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer]);
 }
 
 /// The 32-bit load config directory is shorter, and its `DependentLoadFlags` sit at a different offset.
@@ -344,13 +606,13 @@ fn pe32_kinds(imports: &[&str], load_config: Option<(u16, u32)>) -> Vec<Violatio
 
 #[test]
 fn a_hardened_pe32_passes() {
-    assert_eq!(pe32_kinds(&["KERNEL32.dll"], Some((0x800, FULL32))), vec![]);
+    assert_eq!(pe32_kinds(&[KERNEL32], Some((0x800, FULL32))), vec![]);
 }
 
 #[test]
 fn a_pe32_without_system32_in_its_flags_is_reported() {
     assert_eq!(
-        pe32_kinds(&["KERNEL32.dll"], Some((0x400, FULL32))),
+        pe32_kinds(&[KERNEL32], Some((0x400, FULL32))),
         vec![ViolationKind::PeDependentLoadFlags]
     );
 }
@@ -358,7 +620,7 @@ fn a_pe32_without_system32_in_its_flags_is_reported() {
 #[test]
 fn a_pe32_that_searches_the_executables_folder_is_reported() {
     assert_eq!(
-        pe32_kinds(&["KERNEL32.dll"], Some((0x800 | 0x200, FULL32))),
+        pe32_kinds(&[KERNEL32], Some((0x800 | 0x200, FULL32))),
         vec![ViolationKind::PeDependentLoadFlags]
     );
 }
@@ -367,7 +629,7 @@ fn a_pe32_that_searches_the_executables_folder_is_reported() {
 fn a_pe32_without_a_load_config_or_with_one_too_short_is_reported() {
     for load_config in [None, Some((0x800, 0x30))] {
         assert_eq!(
-            pe32_kinds(&["KERNEL32.dll"], load_config),
+            pe32_kinds(&[KERNEL32], load_config),
             vec![ViolationKind::PeDependentLoadFlags],
             "{load_config:?}"
         );
@@ -377,7 +639,7 @@ fn a_pe32_without_a_load_config_or_with_one_too_short_is_reported() {
 #[test]
 fn a_pe32_that_imports_a_redistributable_is_reported() {
     assert_eq!(
-        pe32_kinds(&["KERNEL32.dll", "VCRUNTIME140.dll"], Some((0x800, FULL32))),
+        pe32_kinds(&[KERNEL32, "VCRUNTIME140.dll"], Some((0x800, FULL32))),
         vec![ViolationKind::PeRuntimeImport]
     );
 }

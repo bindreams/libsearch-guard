@@ -37,6 +37,10 @@ pub enum ViolationKind {
     /// language and UWP `_app` variants, and `ucrtbased`), which Windows searches for in the executable's folder first.
     /// The DLLs that ship in Windows (`msvcp_win`, `msvcrt`, `mfcore`, `mfc42`, ...) are not reported.
     PeRuntimeImport,
+    /// PE: an executable without the `.lsguard` section that the initializer's object defines, so the initializer
+    /// is not linked and a `LoadLibrary` call without flags still searches the executable's folder. A DLL is not
+    /// checked.
+    PeInitializer,
     /// ELF: an `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative.
     ElfSearchPath,
     /// ELF: a `DT_NEEDED` entry that contains a `/` but does not start with one. The loader opens it relative to
@@ -77,14 +81,16 @@ pub enum VerifyError {
     /// The file could not be read.
     Io(std::io::Error),
     /// The file is not a PE, ELF or Mach-O executable this crate can read, a slice of a universal binary is not a
-    /// Mach-O image, or a part of it (a library path, say) is not valid UTF-8, so a check could not be made.
+    /// Mach-O image, a part of it (a library path, say) is not valid UTF-8, or a PE executable without a `.lsguard`
+    /// section has a section name that cannot be read, so a check could not be made.
     Unreadable {
         /// What could not be read.
         why: String,
-        /// The violations found before the unreadable part; each keeps its kind.
+        /// The violations found; each keeps its kind. A PE's checks all run, each stopping at the first entry of its
+        /// own part it cannot read; an ELF or Mach-O file is checked up to the unreadable part.
         found: Vec<Violation>,
     },
-    /// The file breaks one or more rules; every violation found is listed.
+    /// The file breaks one or more rules; every violation found is listed, in no specified order.
     Violations(Vec<Violation>),
 }
 
@@ -104,7 +110,7 @@ impl fmt::Display for VerifyError {
             VerifyError::Unreadable { why, found } => {
                 write!(f, "cannot read the executable: {why}")?;
                 if !found.is_empty() {
-                    write!(f, "; found before that:")?;
+                    write!(f, "; also found:")?;
                     for v in found {
                         write!(
                             f,
@@ -153,7 +159,6 @@ fn verify_bytes(data: &[u8]) -> Result<(), VerifyError> {
     match check(data, &mut violations) {
         Ok(()) if violations.is_empty() => Ok(()),
         Ok(()) => Err(VerifyError::Violations(violations)),
-        // What was found before the unreadable part is not lost.
         Err(VerifyError::Unreadable { why, .. }) => Err(VerifyError::Unreadable { why, found: violations }),
         Err(error) => Err(error),
     }

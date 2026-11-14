@@ -22,6 +22,10 @@ pub enum Probe {
     /// The consumer calls `bins()` and links the C runtime statically (`-C target-feature=+crt-static`).
     #[cfg(windows)]
     HardenedCrtStatic,
+    /// `HardenedCrtStatic` without the initializer: what a consumer is left with when a link change drops the object `bins()`
+    /// hands the linker.
+    #[cfg(windows)]
+    HardenedWithoutInitializer,
     /// Built so that the loader searches the executable's folder, whatever the platform's way of asking is
     /// (an `$ORIGIN` RUNPATH on Linux, an `@executable_path` LC_RPATH on macOS). On Windows that is `Plain`.
     #[cfg_attr(
@@ -91,6 +95,8 @@ fn built(kind: Probe) -> &'static Built {
     static PLAIN: OnceLock<Built> = OnceLock::new();
     #[cfg(windows)]
     static CRT_STATIC: OnceLock<Built> = OnceLock::new();
+    #[cfg(windows)]
+    static NO_INITIALIZER: OnceLock<Built> = OnceLock::new();
     static SEARCHES: OnceLock<Built> = OnceLock::new();
     match kind {
         Probe::Hardened => {
@@ -105,6 +111,16 @@ fn built(kind: Probe) -> &'static Built {
                     ("LIBSEARCH_GUARD_HARDEN_PROBE", "1"),
                     ("RUSTFLAGS", "-C target-feature=+crt-static"),
                 ],
+            )
+        }),
+        #[cfg(windows)]
+        Probe::HardenedWithoutInitializer => NO_INITIALIZER.get_or_init(|| {
+            probe_bins(
+                "probe-hardened-without-initializer",
+                &[(
+                    "RUSTFLAGS",
+                    "-C target-feature=+crt-static -C link-arg=/DEPENDENTLOADFLAG:0x800",
+                )],
             )
         }),
         Probe::SearchesItsFolder if cfg!(windows) => built(Probe::Plain),

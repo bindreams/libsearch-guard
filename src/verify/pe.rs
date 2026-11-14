@@ -1,12 +1,17 @@
 //! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32` and no bit outside it
-//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, and no Visual C++ redistributable DLL is imported, in the
-//! import table or the delay-load import table.
+//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, an executable has the section of the pre-`main` initializer's object, and no
+//! Visual C++ redistributable DLL is imported, in the import table or the delay-load import table.
 
-use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG};
+use object::pe::{
+    ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, IMAGE_FILE_DLL,
+};
 use object::read::pe::{ImageNtHeaders, PeFile};
-use object::LittleEndian as LE;
+use object::{LittleEndian as LE, Object, ObjectSection};
 
 use super::{unreadable, Violation, ViolationKind};
+
+/// The section the initializer's object defines (`initializer/pre_main.rs`, `LINKED`); the two names must match.
+const INITIALIZER_SECTION: &[u8] = b".lsguard";
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
 /// `LOAD_LIBRARY_SEARCH_USER_DIRS`: it adds only the directories registered with `AddDllDirectory`, and none is
@@ -168,10 +173,25 @@ fn mfc_suffix(suffix: &str) -> bool {
     mfcm_suffix(suffix) || (suffix.len() == 3 && suffix.bytes().all(|b| b.is_ascii_lowercase()))
 }
 
+/// Runs every check even if an earlier one cannot read its part of the image; the first unreadable part is the
+/// error, returned after all have run.
 pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -> Result<(), super::VerifyError> {
     let file = PeFile::<Pe, _>::parse(data).map_err(unreadable)?;
+    let results = [
+        check_load_config(&file, data, out),
+        check_imports(&file, out),
+        check_delay_load_imports(&file, out),
+        check_initializer(&file, out),
+    ];
+    results.into_iter().collect()
+}
 
-    let flags = dependent_load_flags::<Pe>(&file, data).map_err(unreadable)?;
+fn check_load_config<'data, Pe: ImageNtHeaders>(
+    file: &PeFile<'data, Pe, &'data [u8]>,
+    data: &'data [u8],
+    out: &mut Vec<Violation>,
+) -> Result<(), super::VerifyError> {
+    let flags = dependent_load_flags::<Pe>(file, data).map_err(unreadable)?;
     if flags & LOAD_LIBRARY_SEARCH_SYSTEM32 == 0 {
         out.push(Violation {
             kind: ViolationKind::PeDependentLoadFlags,
@@ -187,31 +207,95 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
             ),
         });
     }
+    Ok(())
+}
 
-    // A delay-loaded DLL is loaded by `LoadLibrary` at its first call, and is searched for like an imported one.
-    let mut names = Vec::new();
+/// Reports `name`, an imported DLL, if it is a redistributable. Each name is reported as it is read, so a table
+/// that cannot be read to its end still reports the names before the failure.
+fn report_import(name: &[u8], out: &mut Vec<Violation>) {
+    let name = String::from_utf8_lossy(name);
+    if is_redistributable(&name.to_ascii_lowercase()) {
+        out.push(Violation {
+            kind: ViolationKind::PeRuntimeImport,
+            detail: format!("imports {name}, which is searched for in the executable's folder first"),
+        });
+    }
+}
+
+fn check_imports<'data, Pe: ImageNtHeaders>(
+    file: &PeFile<'data, Pe, &'data [u8]>,
+    out: &mut Vec<Violation>,
+) -> Result<(), super::VerifyError> {
     if let Some(imports) = file.import_table().map_err(unreadable)? {
         let mut descriptors = imports.descriptors().map_err(unreadable)?;
         while let Some(descriptor) = descriptors.next().map_err(unreadable)? {
-            names.push(imports.name(descriptor.name.get(LE)).map_err(unreadable)?);
-        }
-    }
-    if let Some(imports) = file.delay_load_import_table().map_err(unreadable)? {
-        let mut descriptors = imports.descriptors().map_err(unreadable)?;
-        while let Some(descriptor) = descriptors.next().map_err(unreadable)? {
-            names.push(imports.name(descriptor.dll_name_rva.get(LE)).map_err(unreadable)?);
-        }
-    }
-    for name in names {
-        let name = String::from_utf8_lossy(name);
-        if is_redistributable(&name.to_ascii_lowercase()) {
-            out.push(Violation {
-                kind: ViolationKind::PeRuntimeImport,
-                detail: format!("imports {name}, which is searched for in the executable's folder first"),
-            });
+            report_import(imports.name(descriptor.name.get(LE)).map_err(unreadable)?, out);
         }
     }
     Ok(())
+}
+
+/// A delay-loaded DLL is loaded by `LoadLibrary` at its first call, and is searched for like an imported one.
+fn check_delay_load_imports<'data, Pe: ImageNtHeaders>(
+    file: &PeFile<'data, Pe, &'data [u8]>,
+    out: &mut Vec<Violation>,
+) -> Result<(), super::VerifyError> {
+    if let Some(imports) = file.delay_load_import_table().map_err(unreadable)? {
+        let mut descriptors = imports.descriptors().map_err(unreadable)?;
+        while let Some(descriptor) = descriptors.next().map_err(unreadable)? {
+            report_import(imports.name(descriptor.dll_name_rva.get(LE)).map_err(unreadable)?, out);
+        }
+    }
+    Ok(())
+}
+
+fn check_initializer<'data, Pe: ImageNtHeaders>(
+    file: &PeFile<'data, Pe, &'data [u8]>,
+    out: &mut Vec<Violation>,
+) -> Result<(), super::VerifyError> {
+    // A DLL must not change the search order of the process that loads it, so `bins()` never links the initializer
+    // into one.
+    let is_dll = file
+        .nt_headers()
+        .file_header()
+        .characteristics
+        .get(LE)
+        .contains(IMAGE_FILE_DLL);
+    if !is_dll && !has_initializer_section(file)? {
+        out.push(Violation {
+            kind: ViolationKind::PeInitializer,
+            detail: "has no `.lsguard` section, so the pre-main initializer is not linked and a LoadLibrary call without flags still searches the executable's folder".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether the image has the initializer's section. The `.CRT$XIAB` entry is merged into `.rdata` and a release
+/// binary has no symbols, so only the section table shows the initializer. An unreadable name could have been
+/// `.lsguard`, so it is an error unless `.lsguard` is found.
+fn has_initializer_section<'data, Pe: ImageNtHeaders>(
+    file: &PeFile<'data, Pe, &'data [u8]>,
+) -> Result<bool, super::VerifyError> {
+    let mut unreadable_name = None;
+    for section in file.sections() {
+        match section.name_bytes() {
+            Ok(name) if name == INITIALIZER_SECTION => return Ok(true),
+            Ok(_) => {}
+            Err(error) => {
+                unreadable_name.get_or_insert((section.pe_section().name, error));
+            }
+        }
+    }
+    match unreadable_name {
+        None => Ok(false),
+        Some((raw_name, error)) => {
+            let name = &raw_name[..raw_name.iter().position(|&byte| byte == 0).unwrap_or(raw_name.len())];
+            Err(super::VerifyError::unreadable(format!(
+                "the name of the section whose name field is `{}` cannot be read ({error}), and the check for the initializer's `.lsguard` section needs it",
+                name.escape_ascii()
+            )))
+        }
+    }
 }
 
 /// `DependentLoadFlags` from the load config directory, or 0 where the directory is absent or too short to
