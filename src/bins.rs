@@ -12,8 +12,11 @@ mod tests;
 /// is its absolute path in `OUT_DIR`, so a file of that name in the linker's working directory cannot satisfy it.
 const MISSING_INPUT_NAME: &str = "libsearch-guard-cannot-harden-this-target-see-README";
 
-/// Source of the pre-`main` initializer.
-const INITIALIZER: &str = include_str!("../initializer/pre_main.rs");
+/// Source of the pre-`main` initializer: the code, then the marker `verify` looks for.
+const INITIALIZER: &str = concat!(
+    include_str!("../initializer/pre_main.rs"),
+    include_str!("../initializer/marker.rs")
+);
 
 /// The static-vcruntime link arguments: link the C startup code and the VC runtime statically, keep the
 /// Universal CRT dynamic, so the binary imports no `vcruntime140.dll`.

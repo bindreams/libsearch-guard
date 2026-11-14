@@ -1,13 +1,18 @@
 //! PE rules: the load config's `DependentLoadFlags` include `LOAD_LIBRARY_SEARCH_SYSTEM32` and no bit outside it
-//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, the import table has `SetDefaultDllDirectories` (the pre-`main`
-//! initializer's call), and no Visual C++ redistributable DLL is imported, in the import table or the
-//! delay-load import table.
+//! and `LOAD_LIBRARY_SEARCH_USER_DIRS`, an executable carries the marker of the pre-`main` initializer (a DLL
+//! never does), and no Visual C++ redistributable DLL is imported, in the import table or the delay-load import
+//! table.
 
-use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG};
-use object::read::pe::{ImageNtHeaders, Import, PeFile};
-use object::LittleEndian as LE;
+use object::pe::{
+    ImageLoadConfigDirectory32, ImageLoadConfigDirectory64, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, IMAGE_FILE_DLL,
+};
+use object::read::pe::{ImageNtHeaders, PeFile};
+use object::{LittleEndian as LE, Object, ObjectSection};
 
 use super::{unreadable, Violation, ViolationKind};
+
+// `MARKER_KEY` and `ENCODED_MARKER`: the one definition `bins()` also compiles into the initializer.
+include!("../../initializer/marker.rs");
 
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u16 = 0x0800;
 /// `LOAD_LIBRARY_SEARCH_USER_DIRS`: it adds only the directories registered with `AddDllDirectory`, and none is
@@ -189,10 +194,17 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         });
     }
 
-    if !imports_initializer_call::<Pe>(&file).map_err(unreadable)? {
+    // A DLL never carries the initializer: it must not change the search order of the process that loads it.
+    let is_dll = file
+        .nt_headers()
+        .file_header()
+        .characteristics
+        .get(LE)
+        .contains(IMAGE_FILE_DLL);
+    if !is_dll && !has_marker(&file).map_err(unreadable)? {
         out.push(Violation {
             kind: ViolationKind::PeInitializer,
-            detail: "does not import SetDefaultDllDirectories, so the pre-main initializer that bins() links in is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
+            detail: "does not carry the marker of the pre-main initializer that bins() links in, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
         });
     }
 
@@ -222,35 +234,34 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
     Ok(())
 }
 
-/// Whether the import table (not the delay-load one: that call runs on first use, not before `main`) imports
-/// `SetDefaultDllDirectories` by name, from any DLL.
+/// Whether a section of the image holds the initializer's marker.
 ///
-/// The initializer is the one thing in a `bins()` binary that calls it, and the call is the only reference to the
-/// import, so a binary has the import exactly when the initializer's object was linked into it. The linker
-/// merges the `.CRT$XIAB` section it sits in into `.rdata` and a release binary has no symbols, so neither
-/// shows it; the import table survives both.
-fn imports_initializer_call<'data, Pe: ImageNtHeaders>(file: &PeFile<'data, Pe, &'data [u8]>) -> object::Result<bool> {
-    let Some(imports) = file.import_table()? else {
-        return Ok(false);
-    };
-    let mut descriptors = imports.descriptors()?;
-    while let Some(descriptor) = descriptors.next()? {
-        // Linkers write the lookup table; a bound or old-style image may leave it empty and have only the address
-        // table, which holds the same names until the loader overwrites it.
-        let thunks_at = match descriptor.original_first_thunk.get(LE) {
-            0 => descriptor.first_thunk.get(LE),
-            at => at,
-        };
-        let mut thunks = imports.thunks(thunks_at)?;
-        while let Some(thunk) = thunks.next::<Pe>()? {
-            if let Import::Name(_hint, name) = imports.import::<Pe>(thunk)? {
-                if name == b"SetDefaultDllDirectories" {
-                    return Ok(true);
-                }
-            }
+/// The marker is in the object that holds the initializer, so a binary has it exactly when the initializer was
+/// linked. The `.CRT$XIAB` entry itself is merged into `.rdata`, and a release binary has no symbols, so neither
+/// shows it.
+fn has_marker<'data, Pe: ImageNtHeaders>(file: &PeFile<'data, Pe, &'data [u8]>) -> object::Result<bool> {
+    for section in file.sections() {
+        if contains_marker(section.data()?) {
+            return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether `data` has the marker in it. It is compared in its encoded form: the text is never assembled here.
+fn contains_marker(data: &[u8]) -> bool {
+    data.windows(ENCODED_MARKER.len()).any(|window| {
+        window
+            .iter()
+            .zip(ENCODED_MARKER)
+            .all(|(byte, encoded)| byte ^ MARKER_KEY == *encoded)
+    })
+}
+
+/// The marker as the initializer holds it, for the tests that build an image that has it.
+#[cfg(test)]
+pub(super) fn marker() -> Vec<u8> {
+    ENCODED_MARKER.iter().map(|byte| byte ^ MARKER_KEY).collect()
 }
 
 /// `DependentLoadFlags` from the load config directory, or 0 where the directory is absent or too short to

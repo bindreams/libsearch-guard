@@ -1,4 +1,4 @@
-use super::crafted::{pe, pe32, Pe};
+use super::crafted::{pe, pe32, pe_variant, Pe, Variant};
 use super::{verify_bytes, VerifyError, ViolationKind};
 
 fn kinds(image: &[u8]) -> Vec<ViolationKind> {
@@ -9,8 +9,7 @@ fn kinds(image: &[u8]) -> Vec<ViolationKind> {
     }
 }
 
-/// A system import that is also the one call the initializer makes, so an image that imports it has the initializer.
-const KERNEL32: &str = "KERNEL32.dll!SetDefaultDllDirectories";
+const KERNEL32: &str = "KERNEL32.dll";
 
 const FULL: u32 = size_of::<object::pe::ImageLoadConfigDirectory64>() as u32;
 
@@ -294,7 +293,7 @@ fn delay_load_kinds(imports: &[&str], delay_imports: &[&str]) -> Vec<ViolationKi
 fn a_delay_loaded_redistributable_is_reported() {
     for dll in ["msvcp140.dll", "VCRUNTIME140.dll", "atl100.dll"] {
         assert_eq!(
-            delay_load_kinds(&[KERNEL32], &["KERNEL32.dll", dll]),
+            delay_load_kinds(&[KERNEL32], &[KERNEL32, dll]),
             vec![ViolationKind::PeRuntimeImport],
             "{dll}"
         );
@@ -316,11 +315,14 @@ fn a_redistributable_is_reported_once_per_table_that_imports_it() {
 
 #[test]
 fn every_violation_is_reported_not_only_the_first() {
-    let image = pe(&Pe {
-        imports: &["VCRUNTIME140.dll", "MSVCP140.dll"],
-        delay_imports: &[],
-        load_config: None,
-    });
+    let image = pe_variant(
+        &Pe {
+            imports: &["VCRUNTIME140.dll", "MSVCP140.dll"],
+            delay_imports: &[],
+            load_config: None,
+        },
+        &no_marker(),
+    );
     assert_eq!(
         kinds(&image),
         vec![
@@ -332,51 +334,123 @@ fn every_violation_is_reported_not_only_the_first() {
     );
 }
 
-/// The initializer's one call is `SetDefaultDllDirectories`, so an image that imports it has the initializer
-/// linked; one that does not has lost it, whatever its load flags say.
-#[test]
-fn an_image_that_does_not_import_set_default_dll_directories_is_reported() {
-    for imports in [&["KERNEL32.dll"][..], &[], &["KERNEL32.dll!SetDllDirectoryW"]] {
-        let image = pe(&Pe {
-            imports,
-            delay_imports: &[],
-            load_config: Some((0x800, FULL)),
-        });
-        assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer], "{imports:?}");
+fn no_marker() -> Variant {
+    Variant {
+        no_marker: true,
+        ..Variant::default()
     }
 }
 
-/// The import counts in any DLL that exports it (`kernel32` or an API set) and in any case of the DLL name.
-#[test]
-fn the_initializer_import_is_found_whichever_dll_it_comes_from() {
-    for dll in ["kernel32.dll", "api-ms-win-core-libraryloader-l1-2-0.dll"] {
-        let import = format!("{dll}!SetDefaultDllDirectories");
-        let image = pe(&Pe {
-            imports: &["USER32.dll", &import],
-            delay_imports: &[],
-            load_config: Some((0x800, FULL)),
-        });
-        assert_eq!(kinds(&image), vec![], "{dll}");
-    }
-}
-
-/// A delay-loaded call runs on first use, not before `main`: it is not the initializer.
-#[test]
-fn a_delay_loaded_set_default_dll_directories_is_not_the_initializer() {
-    let image = pe(&Pe {
-        imports: &["KERNEL32.dll"],
-        delay_imports: &["KERNEL32.dll!SetDefaultDllDirectories"],
+fn hardened_spec() -> Pe<'static> {
+    Pe {
+        imports: &[KERNEL32],
+        delay_imports: &[],
         load_config: Some((0x800, FULL)),
-    });
-    assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer]);
+    }
+}
+
+/// The initializer's object carries the marker, so an image without it has lost the initializer, whatever its
+/// load flags say, and whatever it imports: a dependency that calls `SetDefaultDllDirectories` does not stand in.
+#[test]
+fn an_image_without_the_marker_is_reported() {
+    for imports in [&[KERNEL32][..], &[], &["KERNEL32.dll!SetDefaultDllDirectories"]] {
+        let spec = Pe {
+            imports,
+            ..hardened_spec()
+        };
+        assert_eq!(
+            kinds(&pe_variant(&spec, &no_marker())),
+            vec![ViolationKind::PeInitializer],
+            "{imports:?}"
+        );
+    }
+}
+
+/// Whatever else the image imports, the marker is what shows the initializer.
+#[test]
+fn an_image_with_the_marker_passes_whatever_it_imports() {
+    let spec = Pe {
+        imports: &[
+            "USER32.dll",
+            "api-ms-win-core-libraryloader-l1-2-0.dll!SetDefaultDllDirectories",
+        ],
+        ..hardened_spec()
+    };
+    assert_eq!(kinds(&pe(&spec)), vec![]);
+}
+
+/// A DLL never carries the initializer (it must not change the process's search order), so the check does not
+/// apply to it; the other rules do.
+#[test]
+fn a_dll_without_the_marker_is_not_reported_for_it() {
+    let dll = Variant {
+        dll: true,
+        ..no_marker()
+    };
+    assert_eq!(kinds(&pe_variant(&hardened_spec(), &dll)), vec![]);
+    let flags_missing = Pe {
+        load_config: None,
+        ..hardened_spec()
+    };
+    assert_eq!(
+        kinds(&pe_variant(&flags_missing, &dll)),
+        vec![ViolationKind::PeDependentLoadFlags]
+    );
+    let runtime = Pe {
+        imports: &[KERNEL32, "VCRUNTIME140.dll"],
+        ..hardened_spec()
+    };
+    assert_eq!(kinds(&pe_variant(&runtime, &dll)), vec![ViolationKind::PeRuntimeImport]);
+}
+
+/// An unreadable section stops the search for the marker; what was found before it is kept.
+#[test]
+fn violations_found_before_an_unreadable_section_are_kept() {
+    let spec = Pe {
+        load_config: Some((0x400, FULL)),
+        ..hardened_spec()
+    };
+    let image = pe_variant(
+        &spec,
+        &Variant {
+            broken_section: true,
+            ..no_marker()
+        },
+    );
+    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
+        panic!("an unreadable section was not reported");
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
+}
+
+/// A section that is not readable does not hide a marker found in one that is.
+#[test]
+fn a_marker_in_a_readable_section_passes_next_to_an_unreadable_one() {
+    let image = pe_variant(
+        &hardened_spec(),
+        &Variant {
+            broken_section: true,
+            ..Variant::default()
+        },
+    );
+    assert_eq!(kinds(&image), vec![]);
 }
 
 #[test]
 fn a_pe32_without_the_initializer_is_reported() {
-    assert_eq!(
-        pe32_kinds(&["KERNEL32.dll"], Some((0x800, FULL32))),
-        vec![ViolationKind::PeInitializer]
+    let image = pe_variant(
+        &Pe {
+            imports: &[KERNEL32],
+            delay_imports: &[],
+            load_config: Some((0x800, FULL32)),
+        },
+        &Variant {
+            pe32: true,
+            ..no_marker()
+        },
     );
+    assert_eq!(kinds(&image), vec![ViolationKind::PeInitializer]);
 }
 
 /// The 32-bit load config directory is shorter, and its `DependentLoadFlags` sit at a different offset.

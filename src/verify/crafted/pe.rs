@@ -14,14 +14,38 @@ pub struct Pe<'a> {
     pub load_config: Option<(u16, u32)>,
 }
 
-/// A 64-bit image: PE32+, x86-64.
-pub fn pe(spec: &Pe) -> Vec<u8> {
-    pe_image(spec, Bits::B64)
+/// How a crafted image differs from the default: a 64-bit executable (PE32+, x86-64) that carries the
+/// initializer's marker and whose section data is all in the file.
+#[derive(Default)]
+pub struct Variant {
+    /// PE32, x86.
+    pub pe32: bool,
+    /// Without the marker: the initializer is not linked.
+    pub no_marker: bool,
+    /// A DLL: `IMAGE_FILE_DLL` is set in the COFF characteristics.
+    pub dll: bool,
+    /// A second section whose data lies beyond the end of the file.
+    pub broken_section: bool,
 }
 
-/// A 32-bit image: PE32, x86.
+/// A 64-bit executable.
+pub fn pe(spec: &Pe) -> Vec<u8> {
+    pe_variant(spec, &Variant::default())
+}
+
+/// A 32-bit executable.
 pub fn pe32(spec: &Pe) -> Vec<u8> {
-    pe_image(spec, Bits::B32)
+    pe_variant(
+        spec,
+        &Variant {
+            pe32: true,
+            ..Variant::default()
+        },
+    )
+}
+
+pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
+    pe_image(spec, variant)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -40,7 +64,8 @@ fn dependent_load_flags_at(bits: Bits) -> usize {
     }
 }
 
-fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
+fn pe_image(spec: &Pe, variant: &Variant) -> Vec<u8> {
+    let bits = if variant.pe32 { Bits::B32 } else { Bits::B64 };
     const SECTION_RVA: u32 = 0x1000;
     const SECTION_FILE: usize = 0x200;
     let thunk_size = if bits == Bits::B64 { 8 } else { 4 };
@@ -108,6 +133,11 @@ fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
         );
     }
 
+    if !variant.no_marker {
+        sec.resize(sec.len().next_multiple_of(8), 0);
+        sec.extend_from_slice(&crate::verify::pe::marker());
+    }
+
     let mut load_dir = (0u32, 0u32);
     if let Some((flags, size)) = spec.load_config {
         sec.resize(sec.len().next_multiple_of(8), 0);
@@ -128,12 +158,16 @@ fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
     img[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     img.extend_from_slice(b"PE\0\0");
     // COFF header.
-    let (machine, optional_size, characteristics) = match bits {
+    let (machine, optional_size, mut characteristics) = match bits {
         Bits::B64 => (0x8664u16, 240u16, 0x0022u16), // x86-64; executable, large-address-aware
         Bits::B32 => (0x014cu16, 224u16, 0x0102u16), // x86; executable, 32-bit machine
     };
     img.extend_from_slice(&machine.to_le_bytes());
-    img.extend_from_slice(&1u16.to_le_bytes()); // one section
+    if variant.dll {
+        characteristics |= 0x2000; // IMAGE_FILE_DLL
+    }
+    let sections = if variant.broken_section { 2u16 } else { 1 };
+    img.extend_from_slice(&sections.to_le_bytes());
     img.extend_from_slice(&[0u8; 12]); // timestamp, symbol table, symbol count
     img.extend_from_slice(&optional_size.to_le_bytes());
     img.extend_from_slice(&characteristics.to_le_bytes());
@@ -171,6 +205,16 @@ fn pe_image(spec: &Pe, bits: Bits) -> Vec<u8> {
     header[20..24].copy_from_slice(&(SECTION_FILE as u32).to_le_bytes());
     header[36..40].copy_from_slice(&0x4000_0040u32.to_le_bytes()); // readable initialized data
     img.extend_from_slice(&header);
+    if variant.broken_section {
+        let mut header = [0u8; 40];
+        header[..5].copy_from_slice(b".data");
+        header[8..12].copy_from_slice(&0x200u32.to_le_bytes()); // VirtualSize
+        header[12..16].copy_from_slice(&(SECTION_RVA + section_size as u32).to_le_bytes());
+        header[16..20].copy_from_slice(&0x200u32.to_le_bytes()); // SizeOfRawData
+        header[20..24].copy_from_slice(&0x10_0000u32.to_le_bytes()); // far beyond the end of the file
+        header[36..40].copy_from_slice(&0xC000_0040u32.to_le_bytes()); // readable, writable initialized data
+        img.extend_from_slice(&header);
+    }
     img.resize(SECTION_FILE, 0);
     img.extend_from_slice(&sec);
     img

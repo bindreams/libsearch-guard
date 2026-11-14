@@ -37,9 +37,9 @@ pub enum ViolationKind {
     /// language and UWP `_app` variants, and `ucrtbased`), which Windows searches for in the executable's folder first.
     /// The DLLs that ship in Windows (`msvcp_win`, `msvcrt`, `mfcore`, `mfc42`, ...) are not reported.
     PeRuntimeImport,
-    /// PE: does not import `SetDefaultDllDirectories`, which the initializer that `bins()` links in calls before
-    /// `main`. The initializer is not linked, so a `LoadLibrary` call without flags still searches the
-    /// executable's folder.
+    /// PE: an executable without the marker that the object of the initializer `bins()` links in carries, so the
+    /// initializer is not linked and a `LoadLibrary` call without flags still searches the executable's folder.
+    /// A DLL is not checked: it never carries the initializer.
     PeInitializer,
     /// ELF: an `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative.
     ElfSearchPath,

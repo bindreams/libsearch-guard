@@ -1,0 +1,12 @@
+
+// The initializer's marker, which `verify` looks for in an executable's sections. The text is stored XOR-ed
+// with `MARKER_KEY`, so it appears in no binary but the ones that carry the initializer: not in this crate's
+// source, and not in the code of `verify`, which compares against the encoded form.
+//
+// This file is included twice: appended to `pre_main.rs`, where the initializer's object keeps the decoded
+// marker, and into `verify`.
+const MARKER_KEY: u8 = 0x5a;
+const ENCODED_MARKER: &[u8] = &[
+    0x36, 0x33, 0x38, 0x29, 0x3f, 0x3b, 0x28, 0x39, 0x32, 0x77, 0x3d, 0x2f, 0x3b, 0x28, 0x3e, 0x7a, 0x33, 0x34, 0x33,
+    0x2e, 0x33, 0x3b, 0x36, 0x33, 0x20, 0x3f, 0x28, 0x7a, 0x37, 0x3b, 0x28, 0x31, 0x3f, 0x28, 0x7a, 0x2c, 0x6b,
+];

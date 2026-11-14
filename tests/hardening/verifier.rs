@@ -13,7 +13,7 @@ fn violation_kinds(error: VerifyError) -> Vec<ViolationKind> {
     }
 }
 
-/// What `verify` reports for a binary that has none of the Windows hardening.
+/// What `verify` reports for an executable that has none of the Windows hardening.
 #[cfg(windows)]
 const UNHARDENED: [ViolationKind; 3] = [
     ViolationKind::PeDependentLoadFlags,
@@ -75,7 +75,12 @@ fn only_the_bins_and_their_own_harnesses_are_hardened() {
         ("sidecar", "example", false),
     ] {
         let kinds = violation_kinds(verify(file_of(artifacts, target, kind, harness)).unwrap_err());
-        assert_eq!(kinds, UNHARDENED, "{target} ({kind}, harness: {harness})");
+        // A DLL never carries the initializer, so it is not reported for lacking it.
+        let expected: Vec<_> = UNHARDENED
+            .into_iter()
+            .filter(|kind_| kind != "cdylib" || *kind_ != ViolationKind::PeInitializer)
+            .collect();
+        assert_eq!(kinds, expected, "{target} ({kind}, harness: {harness})");
     }
 }
 
