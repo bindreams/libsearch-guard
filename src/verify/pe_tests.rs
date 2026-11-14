@@ -392,10 +392,77 @@ fn only_a_section_of_exactly_that_name_shows_the_initializer() {
     rename(&mut lookalike, b".lsguard", b".lsguarX");
     assert_eq!(kinds(&lookalike), vec![ViolationKind::PeInitializer]);
 
-    let mut embedded = pe_variant(&hardened_spec(), &no_initializer());
-    let at = embedded.len() - 0x10;
-    embedded[at..at + 8].copy_from_slice(b".lsguard");
+    let embedded = pe_variant(
+        &hardened_spec(),
+        &Variant {
+            unread_data: b".lsguard",
+            ..no_initializer()
+        },
+    );
+    assert!(embedded.windows(8).any(|window| window == b".lsguard"));
     assert_eq!(kinds(&embedded), vec![ViolationKind::PeInitializer]);
+}
+
+/// Where the section headers start in a crafted PE32+ image: the DOS header (0x40), the signature (4), the COFF
+/// header (20) and the optional header (240). The image has `.rdata`, then `.lsguard`; each header is 40 bytes.
+const SECTION_HEADERS: usize = 0x40 + 4 + 20 + 240;
+const SECTION_HEADER: usize = 40;
+
+/// Makes the name of the section at `index` a long name (`/nnn`, an offset into the COFF string table) into a
+/// string table the image does not have.
+fn break_section_name(image: &mut [u8], index: usize) {
+    let at = SECTION_HEADERS + index * SECTION_HEADER;
+    image[at..at + 8].copy_from_slice(b"/99\0\0\0\0\0");
+}
+
+/// A section whose name cannot be read could be the initializer's, so the image is not passed or reported for
+/// lacking it: it is unreadable, and what was found before is kept. Both where the section comes before the
+/// `.lsguard` one and where it comes after.
+#[test]
+fn a_section_name_that_cannot_be_read_is_unreadable_wherever_it_is() {
+    let swap_headers = |image: &mut Vec<u8>| {
+        let (first, second) = (SECTION_HEADERS, SECTION_HEADERS + SECTION_HEADER);
+        for i in 0..SECTION_HEADER {
+            image.swap(first + i, second + i);
+        }
+    };
+    for (broken, swapped) in [(0, false), (1, true)] {
+        let mut image = pe(&Pe {
+            load_config: None,
+            ..hardened_spec()
+        });
+        if swapped {
+            swap_headers(&mut image);
+        }
+        break_section_name(&mut image, broken);
+        let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
+            panic!("broken section {broken} (swapped: {swapped}): not unreadable");
+        };
+        assert_eq!(
+            found.iter().map(|v| v.kind).collect::<Vec<_>>(),
+            vec![ViolationKind::PeDependentLoadFlags],
+            "broken section {broken} (swapped: {swapped})"
+        );
+    }
+}
+
+/// Where the import directory's RVA is in a crafted PE32+ image: the optional header starts at 0x58, the data
+/// directories 112 bytes into it, the import directory is the second, and its size follows its RVA.
+const IMPORT_DIRECTORY_RVA: usize = 0x58 + 112 + 8;
+
+/// What was found before a part that cannot be read is kept, as for ELF and Mach-O.
+#[test]
+fn violations_found_before_an_unreadable_import_table_are_kept() {
+    let mut image = pe(&Pe {
+        load_config: None,
+        ..hardened_spec()
+    });
+    image[IMPORT_DIRECTORY_RVA..IMPORT_DIRECTORY_RVA + 4].copy_from_slice(&0x00F0_0000u32.to_le_bytes());
+    let Err(VerifyError::Unreadable { found, .. }) = verify_bytes(&image) else {
+        panic!("expected an unreadable file");
+    };
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, ViolationKind::PeDependentLoadFlags);
 }
 
 /// A DLL never carries the initializer (it must not change the process's search order), so the check does not

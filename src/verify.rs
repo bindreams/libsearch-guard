@@ -39,8 +39,8 @@ pub enum ViolationKind {
     PeRuntimeImport,
     /// PE: an executable without the `.lsguard` section that the object of the initializer `bins()` links in
     /// defines, so the initializer is not linked and a `LoadLibrary` call without flags still searches the
-    /// executable's folder. A DLL is not checked: it never carries the initializer. A binary hardened by 0.1.0 or
-    /// 0.1.1 has no such section and is reported: rebuild it.
+    /// executable's folder. A DLL is not checked: it never carries the initializer. A binary hardened by 0.1.x has
+    /// no such section and is reported from 0.2.0 on: rebuild it with 0.2.0 or later.
     PeInitializer,
     /// ELF: an `RPATH` or `RUNPATH` element that is `$ORIGIN`-based or relative.
     ElfSearchPath,

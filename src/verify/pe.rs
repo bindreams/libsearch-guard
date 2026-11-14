@@ -201,7 +201,7 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
         .characteristics
         .get(LE)
         .contains(IMAGE_FILE_DLL);
-    if !is_dll && !has_initializer_section(&file) {
+    if !is_dll && !has_initializer_section(&file)? {
         out.push(Violation {
             kind: ViolationKind::PeInitializer,
             detail: "has no `.lsguard` section, which the pre-main initializer that bins() links in contributes, so the initializer is not linked: a LoadLibrary call without flags still searches the executable's folder".into(),
@@ -238,10 +238,17 @@ pub(super) fn check<Pe: ImageNtHeaders>(data: &[u8], out: &mut Vec<Violation>) -
 ///
 /// The object that holds the initializer also defines the section, so an image has it exactly when the initializer
 /// was linked. The `.CRT$XIAB` entry itself is merged into `.rdata`, and a release binary has no symbols, so
-/// neither shows it; the section table always does. Only the name is read: a section's data is not.
-fn has_initializer_section<'data, Pe: ImageNtHeaders>(file: &PeFile<'data, Pe, &'data [u8]>) -> bool {
-    file.sections()
-        .any(|section| section.name_bytes() == Ok(INITIALIZER_SECTION))
+/// neither shows it; the section table always does. Only the names are read: a section's data is not. Every name
+/// is read, and one that cannot be (a long name into a string table the image does not have) makes the image
+/// unreadable: it could have been the initializer's.
+fn has_initializer_section<'data, Pe: ImageNtHeaders>(
+    file: &PeFile<'data, Pe, &'data [u8]>,
+) -> Result<bool, super::VerifyError> {
+    let mut found = false;
+    for section in file.sections() {
+        found |= section.name_bytes().map_err(unreadable)? == INITIALIZER_SECTION;
+    }
+    Ok(found)
 }
 
 /// `DependentLoadFlags` from the load config directory, or 0 where the directory is absent or too short to

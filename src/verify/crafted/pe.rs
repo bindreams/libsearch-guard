@@ -33,6 +33,8 @@ pub struct Variant {
     pub no_initializer: bool,
     /// A DLL: `IMAGE_FILE_DLL` is set in the COFF characteristics.
     pub dll: bool,
+    /// Bytes at the end of the `.rdata` section's data, which nothing in the image refers to or reads.
+    pub unread_data: &'static [u8],
 }
 
 /// A 64-bit executable.
@@ -142,6 +144,7 @@ pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
         sec.extend_from_slice(&config);
         load_dir = (SECTION_RVA + at as u32, size);
     }
+    sec.extend_from_slice(variant.unread_data);
     let section_size = sec.len().next_multiple_of(0x200);
     sec.resize(section_size, 0);
 
@@ -176,7 +179,8 @@ pub fn pe_variant(spec: &Pe, variant: &Variant) -> Vec<u8> {
     }
     opt[32..36].copy_from_slice(&0x1000u32.to_le_bytes()); // SectionAlignment
     opt[36..40].copy_from_slice(&0x200u32.to_le_bytes()); // FileAlignment
-    let guard_rva = SECTION_RVA + section_size as u32;
+                                                          // Every section starts, and the image ends, on a multiple of SectionAlignment.
+    let guard_rva = (SECTION_RVA + section_size as u32).next_multiple_of(0x1000);
     let image_end = if variant.no_initializer {
         guard_rva
     } else {
