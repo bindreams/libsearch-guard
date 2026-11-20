@@ -8,6 +8,7 @@ env:
 
 jobs:
   part1:
+    if: false
     name: Part 1 (CR in OUT_DIR, Linux to windows-msvc)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -26,7 +27,6 @@ jobs:
             probe-out
 
   part2-build:
-    if: false
     name: Part 2 build (gnullvm, Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -54,7 +54,6 @@ jobs:
             probe-out
 
   part2-run:
-    if: false
     name: Part 2 run (gnullvm programs, Windows)
     needs: part2-build
     runs-on: windows-latest

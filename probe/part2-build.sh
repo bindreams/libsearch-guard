@@ -80,12 +80,13 @@ cp probe/order.rs "$work/order/src/main.rs"
 DLF=-Wl,--dependent-load-flag=0x800
 build_order() { # <label> <extra link args...>
   local label=$1; shift
-  local flags="-C link-arg=$out/order_cxx.o"
+  local flags="-C target-feature=+crt-static -C link-arg=$out/order_cxx.o"
   for a in "$@"; do flags="$flags -C link-arg=$a"; done
   echo "---- build $label: $*"
   if RUSTFLAGS="$flags" cargo build --manifest-path "$work/order/Cargo.toml" --target $target --target-dir "$work/t-order-$label" >"$work/order-$label.log" 2>&1; then
     cp "$work/t-order-$label/$target/debug/order.exe" "$out/order-$label.exe"
-    echo "link OK"
+    echo "link OK; imports:"; llvm-readobj --coff-imports "$out/order-$label.exe" | grep -E 'Name: .*\.dll' | sort -u | tr '
+' ' '; echo
   else
     echo "link FAILED:"; grep -E "error|undefined|unknown" "$work/order-$label.log" | cut -c1-300 | head -8
   fi
