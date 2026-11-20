@@ -136,6 +136,15 @@ pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
     0
 }
 
+// Symbols the C runtime / MSVC support libraries would supply.
+#[no_mangle]
+pub static _fltused: i32 = 0;
+#[no_mangle]
+pub extern "C" fn __CxxFrameHandler3() {}
+#[cfg(target_arch = "x86")]
+#[no_mangle]
+pub extern "C" fn _aulldiv() {}
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
@@ -178,7 +187,7 @@ stub_libs() { # <triple> <dir>
   mkdir -p "$2"
   echo '#![no_std]' >"$2/empty.rs"
   rustc --edition 2021 --crate-type lib --emit=obj --target "$1" -C panic=abort -o "$2/empty.obj" "$2/empty.rs"
-  for l in libcmt libvcruntime ucrt; do ar rcs "$2/$l.lib" "$2/empty.obj"; done
+  for l in libcmt libvcruntime ucrt softintrin; do ar rcs "$2/$l.lib" "$2/empty.obj"; done
 }
 # build <label> <triple> <target-dir-path> <pad-len or empty>
 build() {
