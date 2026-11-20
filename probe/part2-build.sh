@@ -103,8 +103,10 @@ for f in order-guard order-guard-dlf; do
 done
 
 # The planted DLL (a cdylib) for the Windows job.
-cargo build --locked -p planted --target $target --target-dir "$work/t-planted" && cp "$work/t-planted/$target/debug/planted.dll" "$out/planted.dll"
+RUSTFLAGS="-C target-feature=+crt-static" cargo build --locked -p planted --target $target --target-dir "$work/t-planted" && cp "$work/t-planted/$target/debug/planted.dll" "$out/planted.dll"
 
+echo "---- planted.dll imports:"; llvm-readobj --coff-imports "$out/planted.dll" | grep -E 'Name: .*\.dll' | sort -u | tr '
+' ' '; echo
 # verify's view of the images.
 mkdir -p "$work/checker/src"
 cat >"$work/checker/Cargo.toml" <<EOF
