@@ -1,0 +1,78 @@
+name: Probe
+
+on:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  part1:
+    name: Part 1 (CR in OUT_DIR, Linux to windows-msvc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/install-toolchain
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc,aarch64-pc-windows-msvc,arm64ec-pc-windows-msvc
+      - run: bash probe/part1.sh 2>&1 | tee part1.out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: part1
+          path: |
+            part1.out
+            probe-out
+
+  part2-build:
+    name: Part 2 build (gnullvm, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/install-toolchain
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-pc-windows-gnullvm
+      - name: Install llvm-mingw
+        run: |
+          set -euo pipefail
+          url=https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-ubuntu-22.04-x86_64.tar.xz
+          curl -fsSL -o "$RUNNER_TEMP/llvm-mingw.tar.xz" "$url"
+          echo "919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+      - run: bash probe/part2-build.sh 2>&1 | tee part2-build.out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: part2
+          path: |
+            part2-build.out
+            probe-out
+
+  part2-run:
+    name: Part 2 run (gnullvm programs, Windows)
+    needs: part2-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: part2
+      - shell: bash
+        run: bash probe/part2-run.sh 2>&1 | tee part2-run.out
+
+  part3:
+    name: Part 3 (sidecar, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/install-toolchain
+        with:
+          toolchain: 1.99.1
+      - shell: bash
+        run: bash probe/part3.sh 2>&1 | tee part3.out
