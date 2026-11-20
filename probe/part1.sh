@@ -126,6 +126,15 @@ cargo build --manifest-path "$work/checker/Cargo.toml" --target-dir "$work/check
 checker=$work/checker-target/debug/checker
 
 fail=0
+# The C runtime libraries bins() names as default libraries (libcmt, libvcruntime, ucrt) belong to the Windows SDK /
+# Visual C++, which this host has not. lld-link errors on a missing default library, so each is an empty archive:
+# the link arguments, the response file and the image are the real ones; no code from those libraries is linked.
+stub_libs() { # <triple> <dir>
+  mkdir -p "$2"
+  echo '#![no_std]' >"$2/empty.rs"
+  rustc --edition 2021 --crate-type lib --emit=obj --target "$1" -C panic=abort -o "$2/empty.obj" "$2/empty.rs"
+  for l in libcmt libvcruntime ucrt; do ar rcs "$2/$l.lib" "$2/empty.obj"; done
+}
 # build <label> <triple> <target-dir-path> <pad-len or empty>
 build() {
   local label=$1 triple=$2 tdir=$3 pad=$4
@@ -134,9 +143,10 @@ build() {
   echo "=================== $label  [$triple]  target dir: $(printf %q "$tdir")  pad: ${pad:-none}"
   rm -rf "$tdir"
   local log="$work/$label.$triple"
+  stub_libs "$triple" "$work/stub-$triple"
   (
     export "CARGO_TARGET_${upper}_LINKER=$work/lld-link-logged"
-    export RUSTFLAGS="-C linker-flavor=lld-link"
+    export RUSTFLAGS="-C linker-flavor=lld-link -C link-arg=/LIBPATH:$work/stub-$triple"
     export LSG_LINK_LOG=$log
     export CARGO_TARGET_DIR=$tdir
     if [ -n "$pad" ]; then export PAD_LEN=$pad; fi

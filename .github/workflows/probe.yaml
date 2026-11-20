@@ -89,7 +89,7 @@ jobs:
       - name: Does the MinGW lld driver have --dependent-load-flag
         run: |
           set -euo pipefail
-          url=https://github.com/mstorsjo/llvm-mingw/releases/download/${{ matrix.tag }}/llvm-mingw-${{ matrix.tag }}-ucrt-ubuntu-22.04-x86_64.tar.xz
+          url=https://github.com/mstorsjo/llvm-mingw/releases/download/${{ matrix.tag }}/llvm-mingw-${{ matrix.tag }}-ucrt-ubuntu-20.04-x86_64.tar.xz
           curl -fsSL -o "$RUNNER_TEMP/l.tar.xz" "$url"
           sha256sum "$RUNNER_TEMP/l.tar.xz"
           mkdir "$RUNNER_TEMP/l"
