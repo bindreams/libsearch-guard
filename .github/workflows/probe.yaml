@@ -26,6 +26,7 @@ jobs:
             probe-out
 
   part2-build:
+    if: false
     name: Part 2 build (gnullvm, Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -53,6 +54,7 @@ jobs:
             probe-out
 
   part2-run:
+    if: false
     name: Part 2 run (gnullvm programs, Windows)
     needs: part2-build
     runs-on: windows-latest
@@ -66,6 +68,7 @@ jobs:
         run: bash probe/part2-run.sh 2>&1 | tee part2-run.out
 
   part3:
+    if: false
     name: Part 3 (sidecar, Windows)
     runs-on: windows-latest
     timeout-minutes: 30
@@ -78,6 +81,7 @@ jobs:
         run: bash probe/part3.sh 2>&1 | tee part3.out
 
   part2-bisect:
+    if: false
     name: Part 2 bisect (${{ matrix.tag }})
     strategy:
       fail-fast: false

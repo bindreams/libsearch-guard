@@ -52,6 +52,7 @@ cat >"$work/consumer/build.rs" <<'EOF'
 fn main() {
     libsearch_guard::bins();
     println!("cargo:rustc-link-arg-bins=/ENTRY:entry");
+    println!("cargo:rustc-link-arg-bins=/SUBSYSTEM:CONSOLE");
     println!("cargo:rerun-if-env-changed=PAD_LEN");
     if let Some(len) = std::env::var_os("PAD_LEN") {
         let len: usize = len.to_str().unwrap().parse().unwrap();
