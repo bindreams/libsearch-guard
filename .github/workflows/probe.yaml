@@ -76,3 +76,23 @@ jobs:
           toolchain: 1.99.1
       - shell: bash
         run: bash probe/part3.sh 2>&1 | tee part3.out
+
+  part2-bisect:
+    name: Part 2 bisect (${{ matrix.tag }})
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ["20241119", "20241217", "20250114", "20250203", "20250212", "20250227", "20250305", "20250319"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Does the MinGW lld driver have --dependent-load-flag
+        run: |
+          set -euo pipefail
+          url=https://github.com/mstorsjo/llvm-mingw/releases/download/${{ matrix.tag }}/llvm-mingw-${{ matrix.tag }}-ucrt-ubuntu-22.04-x86_64.tar.xz
+          curl -fsSL -o "$RUNNER_TEMP/l.tar.xz" "$url"
+          sha256sum "$RUNNER_TEMP/l.tar.xz"
+          mkdir "$RUNNER_TEMP/l"
+          tar -xJf "$RUNNER_TEMP/l.tar.xz" -C "$RUNNER_TEMP/l" --strip-components=1
+          "$RUNNER_TEMP/l/bin/ld.lld" --version
+          "$RUNNER_TEMP/l/bin/ld.lld" -m i386pep --help 2>&1 | grep -i 'dependent-load' || echo "NO dependent-load-flag option"
