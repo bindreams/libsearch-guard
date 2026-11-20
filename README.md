@@ -50,6 +50,12 @@ A hardened executable that ships a DLL must load it explicitly:
 
 - A sidecar that imports `vcruntime140.dll` loads with `LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32`, and only where the Visual C++ redistributable is installed: that is what puts `vcruntime140.dll` in System32. The flags also govern the DLL's own dependencies, and the hardened executable has not loaded `vcruntime140.dll` for it. Where the redistributable may be missing, ship the sidecar static-CRT instead.
 - A sidecar that is static-CRT and has no other imports loads with `LOAD_LIBRARY_SEARCH_APPLICATION_DIR` alone.
+- A sidecar that links the VC runtime statically but the Universal CRT dynamically (`api-ms-win-crt-*` imports, which resolve to `ucrtbase.dll`) loads with `LOAD_LIBRARY_SEARCH_APPLICATION_DIR` alone too: measured on Windows 11 and Windows Server 2025 (both build 26100), from a hardened executable with a dynamic Universal CRT and from one built with `+crt-static`. The flag excludes System32, yet `ucrtbase.dll` is found. Only `vcruntime140.dll` needs System32.
+
+To ship a C or C++ sidecar static-CRT, which links the Universal CRT statically as well so that it imports no CRT DLL:
+
+- CMake (3.15 or later): `set_property(TARGET sidecar PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")`, which is `/MT` in Release and `/MTd` in Debug.
+- vcpkg: build the dependencies with a `-windows-static` triplet (`x64-windows-static`, `arm64-windows-static`), which also builds them against the static CRT.
 
 ## Verify
 
