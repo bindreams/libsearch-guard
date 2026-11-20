@@ -28,7 +28,7 @@ log=\$LSG_LINK_LOG
     esac
   done
 } >"\$log.args" 2>&1
-exec "$lld" -flavor link "\$@"
+exec "$lld" "\$@"
 EOF
 chmod +x "$work/lld-link-logged"
 

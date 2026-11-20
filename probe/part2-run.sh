@@ -10,7 +10,11 @@ for exe in "$out"/order-*.exe; do
   cp "$exe" "$app/order.exe"
   for slot in xiaa xiac xic xct xcu cxx cattr; do cp "$out/planted.dll" "$app/planted-$slot.dll"; done
   echo "---- $name"
+  ls -l "$app/order.exe" "$exe"
   (cd "$work" && "$app/order.exe") 2>&1
-  echo "exit code: $?"
+  echo "exit code (bash): $?"
+  (cd "$work" && cmd //c "$(cygpath -w "$app/order.exe")") 2>&1
+  echo "exit code (cmd): $?"
+  powershell -NoProfile -Command "& { Set-Location '$(cygpath -w "$work")'; & '$(cygpath -w "$app/order.exe")'; 'exit code (powershell): ' + \$LASTEXITCODE }" 2>&1
   rm -r "$app" "$work"
 done
