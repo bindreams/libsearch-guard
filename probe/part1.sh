@@ -145,6 +145,35 @@ pub extern "C" fn __CxxFrameHandler3() {}
 #[no_mangle]
 pub extern "C" fn _aulldiv() {}
 
+// The load configuration the CRT's loadcfg.obj would supply. The linker writes /DEPENDENTLOADFLAG into it, and only
+// when it exists; its first field is its own size (0xC0 for a 32-bit image, 0x140 for a 64-bit one).
+#[cfg(target_pointer_width = "32")]
+const LOAD_CONFIG_SIZE: usize = 0xC0;
+#[cfg(target_pointer_width = "64")]
+const LOAD_CONFIG_SIZE: usize = 0x140;
+#[repr(C)]
+pub struct LoadConfig {
+    size: u32,
+    rest: [u8; LOAD_CONFIG_SIZE - 4],
+}
+#[no_mangle]
+#[used]
+pub static _load_config_used: LoadConfig = LoadConfig { size: LOAD_CONFIG_SIZE as u32, rest: [0; LOAD_CONFIG_SIZE - 4] };
+
+// What an ARM64EC image needs from the (absent) ARM64EC runtime.
+#[cfg(target_arch = "arm64ec")]
+#[no_mangle]
+pub extern "C" fn __icall_helper_arm64ec() {}
+#[cfg(target_arch = "arm64ec")]
+#[no_mangle]
+pub extern "C" fn __os_arm64x_dispatch_ret() {}
+#[cfg(target_arch = "arm64ec")]
+#[no_mangle]
+pub extern "C" fn __os_arm64x_dispatch_call_no_redirect() {}
+#[cfg(target_arch = "arm64ec")]
+#[no_mangle]
+pub extern "C" fn __os_arm64x_check_icall() {}
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
